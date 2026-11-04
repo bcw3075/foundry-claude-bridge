@@ -44,7 +44,7 @@ app.get("/health", (req, res) => res.json({ ok: true, foundry: foundry.state, si
 const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
 app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
   /* stateless: a fresh MCP server per request, so no session table and nothing to leak between calls */
-  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.0" }, { instructions:
+  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.1" }, { instructions:
     "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status." });
   registerTools(server, foundry, cfg, audit);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

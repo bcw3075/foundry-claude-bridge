@@ -34,10 +34,13 @@ export class FoundryClient {
     const p = this.page, cfg = this.cfg;
     this.state = "joining";
     await p.goto(cfg.foundryUrl + "/join", { waitUntil: "domcontentloaded", timeout: 30000 });
-    const sel = await p.$("select[name=userId]");
+    /* Foundry 14 draws the join form with JavaScript a moment after the page loads, so wait for it */
+    const sel = await p.waitForSelector("select[name=userId]", { timeout: 20000 }).catch(() => null);
     if (!sel) {
       const text = (await p.textContent("body").catch(() => "")) ?? "";
-      throw new Error(/no active game/i.test(text) ? "No world is running in Foundry." : `Foundry's join page isn't available (${p.url()}).`);
+      if (/no active game/i.test(text)) throw new Error("No world is running in Foundry.");
+      if (/administrator/i.test(text) || /\/auth/.test(p.url())) throw new Error("Foundry is on its setup screen (no world running).");
+      throw new Error(`Foundry's join page isn't available (${p.url()}: "${text.replace(/\s+/g, " ").trim().slice(0, 80)}").`);
     }
     const ok = await p.evaluate(({ user, pass }) => {
       const s = document.querySelector("select[name=userId]");
