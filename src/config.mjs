@@ -23,6 +23,8 @@ const DEFAULTS = {
   allowScripts: false,
   /* run Chromium without a window */
   headless: true,
+  /* which Chromium to run: "chromium" (full browser, new headless mode, can use the GPU) or "" (Playwright's headless shell, software drawing) */
+  browserChannel: "chromium",
   /* extra Chromium flags, if a machine needs them (e.g. "--use-angle=swiftshader") */
   chromiumArgs: [],
   /* where tokens, clients and the audit log live */

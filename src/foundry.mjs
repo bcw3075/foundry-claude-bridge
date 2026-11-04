@@ -15,7 +15,11 @@ export class FoundryClient {
     if (this.browser) return;
     this.state = "starting";
     /* Foundry's canvas needs WebGL; these flags let headless Chromium use the GPU, or software rendering where there is none */
-    this.browser = await chromium.launch({ headless: this.cfg.headless, args: ["--ignore-gpu-blocklist", "--enable-unsafe-swiftshader", "--mute-audio", ...(this.cfg.chromiumArgs ?? [])] });
+    /* "chromium" = full Chromium in its new headless mode, which can use the GPU; the default headless shell draws in software and
+       made a 6 MB map redraw take 2 minutes instead of 12 s. Set browserChannel to "" in config.json to go back to the shell. */
+    const channel = this.cfg.browserChannel === undefined ? "chromium" : this.cfg.browserChannel;
+    this.browser = await chromium.launch({ headless: this.cfg.headless, ...(channel ? { channel } : {}),
+      args: ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-accelerated-2d-canvas", "--enable-unsafe-swiftshader", "--mute-audio", ...(this.cfg.chromiumArgs ?? [])] });
     const ctx = await this.browser.newContext({ viewport: { width: 1600, height: 1000 }, ignoreHTTPSErrors: true });
     this.page = await ctx.newPage();
     this.page.on("console", m => { if (m.type() === "error") this.log("foundry", `console: ${m.text().slice(0, 300)}`); });
