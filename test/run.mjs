@@ -73,10 +73,10 @@ try {
   r = await call("tokens_list"); check("tokens_list", r.ok && r.data.tokens[0].name === "Test Hero", r.text.slice(0, 120));
   r = await call("token_move", { id: "t1", x: 250, y: 400, animate: false }); check("token_move", r.ok && r.data.arrived, r.text);
   r = await call("scene_activate", { id: "s2" }); check("scene_activate", r.ok && r.data.active === "World Map");
-  r = await call("scene_view", { id: "s1" }); check("scene_view", r.ok && r.data.viewing === "Stoneclaim sheet");
+  r = await call("scene_view", { id: "s1" }); check("scene_view", r.ok && r.data.viewing === "Village sheet");
   r = await call("combat_get"); check("combat_get", r.ok && r.data.round === 2 && r.data.combatants[0].conditions[0] === "Frightened 2", r.text.slice(0, 120));
-  r = await call("journal_search", { query: "goblins" }); check("journal_search (page text)", r.ok && r.data[0]?.name === "Stoneclaim", r.text);
-  r = await call("journal_get", { id: "j1" }); check("journal_get marks secrets", r.ok && /\[GM secret\]/.test(r.data.text) && /Stoneclaim/.test(r.data.text), r.text.slice(0, 160));
+  r = await call("journal_search", { query: "goblins" }); check("journal_search (page text)", r.ok && r.data[0]?.name === "Millbrook", r.text);
+  r = await call("journal_get", { id: "j1" }); check("journal_get marks secrets", r.ok && /\[GM secret\]/.test(r.data.text) && /Millbrook/.test(r.data.text), r.text.slice(0, 160));
   r = await call("map_sheet_create", { hexes: [{ i: 100, j: 150 }], name: "Bridge test" }); const job = r.data.job; check("map_sheet_create starts a job", r.ok && !!job, r.text);
   await new Promise(x => setTimeout(x, 600));
   r = await call("job_status", { job }); check("job_status returns the result", r.ok && r.data.done && r.data.result?.name === "Bridge test", r.text);
