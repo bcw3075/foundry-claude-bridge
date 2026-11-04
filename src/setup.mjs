@@ -20,7 +20,7 @@ cfg.publicUrl = (await ask("Public address Claude will use (the tunnel route)", 
 cfg.port = Number(await ask("Local port to listen on", String(cfg.port)));
 cfg.foundryUrl = (await ask("Foundry address on this machine", cfg.foundryUrl)).replace(/\/+$/, "");
 cfg.foundryUser = await ask("Foundry user the bridge joins as (a GM account)", cfg.foundryUser);
-cfg.foundryPassword = await askHidden("That user's Foundry password (blank if none; not shown as you type)") || cfg.foundryPassword;
+cfg.foundryPassword = await askHidden("That user's Foundry password (press Enter for none; not shown as you type)");
 let pass = "";
 while (!pass) {
   pass = await askHidden("Passphrase that approves a new Claude connection (typed once in the browser when adding the connector; not shown as you type)");

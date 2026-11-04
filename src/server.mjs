@@ -18,8 +18,9 @@ if (!cfg.passphrase) { console.error("No approval passphrase set. Run: npm run s
 /* ---- logging and audit ---- */
 const logFile = path.join(cfg.dataDir, "bridge.log"), auditFile = path.join(cfg.dataDir, "audit.log");
 const log = (area, msg) => { const line = `${new Date().toISOString()} [${area}] ${msg}`; console.log(line); fs.appendFile(logFile, line + "\n", () => {}); };
-const trim = v => { const s = JSON.stringify(v ?? null); return s.length > 600 ? s.slice(0, 600) + "…" : s; };
-const audit = rec => fs.appendFile(auditFile, JSON.stringify({ time: new Date().toISOString(), ...rec, args: rec.args === undefined ? undefined : JSON.parse(trim(rec.args)) }) + "\n", () => {});
+/* long argument values (a script, pasted sheet data) are shortened in the audit log; the record itself stays valid JSON */
+const trim = v => typeof v === "string" ? (v.length > 600 ? v.slice(0, 600) + `… (${v.length} chars)` : v) : Array.isArray(v) ? v.map(trim) : (v && typeof v === "object") ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, trim(x)])) : v;
+const audit = rec => fs.appendFile(auditFile, JSON.stringify({ time: new Date().toISOString(), ...rec, args: rec.args === undefined ? undefined : trim(rec.args) }) + "\n", () => {});
 
 /* ---- Foundry client ---- */
 const foundry = new FoundryClient(cfg, log);
@@ -44,7 +45,7 @@ app.get("/health", (req, res) => res.json({ ok: true, foundry: foundry.state, si
 const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
 app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
   /* stateless: a fresh MCP server per request, so no session table and nothing to leak between calls */
-  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.3" }, { instructions:
+  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.4" }, { instructions:
     "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status." });
   registerTools(server, foundry, cfg, audit);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
