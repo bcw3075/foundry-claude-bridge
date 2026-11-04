@@ -44,7 +44,7 @@ app.get("/health", (req, res) => res.json({ ok: true, foundry: foundry.state, si
 const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
 app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
   /* stateless: a fresh MCP server per request, so no session table and nothing to leak between calls */
-  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.1" }, { instructions:
+  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.2" }, { instructions:
     "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status." });
   registerTools(server, foundry, cfg, audit);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -55,9 +55,12 @@ app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
 
 app.use((err, req, res, next) => { log("http", `error: ${err.message}`); if (!res.headersSent) res.status(400).type("text").send("bad request"); });
 
-const httpServer = app.listen(cfg.port, "127.0.0.1", () => {
-  log("http", `listening on http://127.0.0.1:${cfg.port}, public ${cfg.publicUrl}, scripts ${cfg.allowScripts ? "ALLOWED" : "off"}`);
-  foundry.start();
-});
-const shutdown = async () => { log("http", "stopping"); httpServer.close(); await foundry.stop(); process.exit(0); };
+/* Listen on both loopback addresses: cloudflared's "localhost" may resolve to ::1 on Windows, and nothing outside this machine should reach the port directly. */
+const servers = [];
+const listen = (host) => new Promise(res => { const s = app.listen(cfg.port, host, () => { log("http", `listening on http://${host.includes(":") ? "[" + host + "]" : host}:${cfg.port}`); res(s); }); s.on("error", e => { log("http", `can't listen on ${host}: ${e.message}`); res(null); }); });
+for (const h of ["127.0.0.1", "::1"]) { const s = await listen(h); if (s) servers.push(s); }
+if (!servers.length) { console.error("Could not open the port."); process.exit(1); }
+log("http", `public ${cfg.publicUrl}, scripts ${cfg.allowScripts ? "ALLOWED" : "off"}`);
+foundry.start();
+const shutdown = async () => { log("http", "stopping"); for (const s of servers) s.close(); await foundry.stop(); process.exit(0); };
 process.on("SIGINT", shutdown); process.on("SIGTERM", shutdown);
