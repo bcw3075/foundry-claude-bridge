@@ -1,0 +1,22 @@
+{
+  "name": "foundry-claude-bridge",
+  "version": "0.1.0",
+  "description": "A small MCP server that lets Claude act inside a Foundry VTT world through a headless GM client on the same machine.",
+  "type": "module",
+  "private": true,
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "setup": "node src/setup.mjs",
+    "test": "node test/run.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "express": "^5.3.0",
+    "playwright": "1.63.0",
+    "zod": "^3.25.0"
+  }
+}

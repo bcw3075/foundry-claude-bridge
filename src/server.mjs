@@ -1,0 +1,63 @@
+/* Entry point: HTTP server with the OAuth endpoints, the MCP endpoint and a health page.
+   Run behind the Cloudflare Tunnel route that points at http://localhost:<port>. */
+import fs from "node:fs";
+import path from "node:path";
+import express from "express";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { loadConfig } from "./config.mjs";
+import { BridgeAuthProvider } from "./auth.mjs";
+import { FoundryClient } from "./foundry.mjs";
+import { registerTools } from "./tools.mjs";
+
+const cfg = loadConfig();
+if (!cfg.passphrase) { console.error("No approval passphrase set. Run: npm run setup"); process.exit(1); }
+
+/* ---- logging and audit ---- */
+const logFile = path.join(cfg.dataDir, "bridge.log"), auditFile = path.join(cfg.dataDir, "audit.log");
+const log = (area, msg) => { const line = `${new Date().toISOString()} [${area}] ${msg}`; console.log(line); fs.appendFile(logFile, line + "\n", () => {}); };
+const trim = v => { const s = JSON.stringify(v ?? null); return s.length > 600 ? s.slice(0, 600) + "…" : s; };
+const audit = rec => fs.appendFile(auditFile, JSON.stringify({ time: new Date().toISOString(), ...rec, args: rec.args === undefined ? undefined : JSON.parse(trim(rec.args)) }) + "\n", () => {});
+
+/* ---- Foundry client ---- */
+const foundry = new FoundryClient(cfg, log);
+
+/* ---- HTTP ---- */
+const app = express();
+app.set("trust proxy", 1);   /* exactly one proxy hop: cloudflared on this machine */
+app.disable("x-powered-by");
+app.use((req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
+
+const issuer = new URL(cfg.publicUrl), mcpUrl = new URL("/mcp", cfg.publicUrl);
+const provider = new BridgeAuthProvider(cfg, log);
+app.use(mcpAuthRouter({
+  provider, issuerUrl: issuer, resourceServerUrl: mcpUrl, resourceName: "Foundry Claude Bridge",
+  scopesSupported: ["foundry"], serviceDocumentationUrl: new URL("/", cfg.publicUrl)
+}));
+app.post("/approve", express.urlencoded({ extended: false }), (req, res) => provider.handleApprove(req, res));
+
+app.get("/", (req, res) => res.type("text").send(`Foundry Claude Bridge\nAdd ${mcpUrl.href} as a custom connector in Claude.\nFoundry: ${foundry.state}${foundry.lastError ? " (" + foundry.lastError + ")" : ""}\n`));
+app.get("/health", (req, res) => res.json({ ok: true, foundry: foundry.state, since: foundry.since, error: foundry.lastError }));
+
+const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
+app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
+  /* stateless: a fresh MCP server per request, so no session table and nothing to leak between calls */
+  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.0" }, { instructions:
+    "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status." });
+  registerTools(server, foundry, cfg, audit);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  res.on("close", () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
+  try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
+  catch (e) { log("mcp", `request failed: ${e.message}`); if (!res.headersSent) res.status(500).json({ error: "internal error" }); }
+});
+
+app.use((err, req, res, next) => { log("http", `error: ${err.message}`); if (!res.headersSent) res.status(400).type("text").send("bad request"); });
+
+const httpServer = app.listen(cfg.port, "127.0.0.1", () => {
+  log("http", `listening on http://127.0.0.1:${cfg.port}, public ${cfg.publicUrl}, scripts ${cfg.allowScripts ? "ALLOWED" : "off"}`);
+  foundry.start();
+});
+const shutdown = async () => { log("http", "stopping"); httpServer.close(); await foundry.stop(); process.exit(0); };
+process.on("SIGINT", shutdown); process.on("SIGTERM", shutdown);

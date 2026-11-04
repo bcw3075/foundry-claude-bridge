@@ -1,0 +1,264 @@
+/* The tools Claude gets. Each one runs a self-contained function inside the Foundry page.
+   Reads are free; writes are the few the GM asked for; nothing here deletes documents. */
+import { z } from "zod";
+
+const json = v => ({ content: [{ type: "text", text: typeof v === "string" ? v : JSON.stringify(v, null, 1) }] });
+const fail = msg => ({ isError: true, content: [{ type: "text", text: msg }] });
+const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+
+/* ---------- in-page helpers, duplicated in each function that needs them (functions must be self-contained) ---------- */
+
+export function registerTools(server, foundry, cfg, audit) {
+  const tool = (name, def, run) => server.registerTool(name, def, async (args) => {
+    const t0 = Date.now();
+    try {
+      const out = await run(args ?? {});
+      audit({ tool: name, args, ok: true, ms: Date.now() - t0 });
+      return out;
+    } catch (e) {
+      const msg = String(e?.message ?? e);
+      audit({ tool: name, args, ok: false, error: msg, ms: Date.now() - t0 });
+      return fail(msg);
+    }
+  });
+
+  /* ---------- status ---------- */
+  tool("foundry_status", {
+    title: "Foundry status",
+    description: "Whether the bridge is connected to Foundry, which world and scene are active, who is online, and the module list.",
+    inputSchema: {}, annotations: READ
+  }, async () => {
+    const s = foundry.status();
+    if (s.state !== "ready") return json({ connected: false, ...s });
+    const info = await foundry.eval(() => ({
+      world: game.world.title, worldId: game.world.id, core: game.version, system: `${game.system.id} ${game.system.version}`,
+      user: game.user.name, role: game.user.role, paused: game.paused,
+      activeScene: game.scenes.active?.name ?? null, viewedScene: canvas.scene?.name ?? null,
+      online: game.users.filter(u => u.active).map(u => `${u.name}${u.isGM ? " (GM)" : ""}`),
+      activeGM: game.users.activeGM?.name ?? null,
+      worldTime: game.time.worldTime,
+      modules: [...game.modules].filter(m => m.active).map(m => `${m.id} ${m.version}`)
+    }));
+    return json({ connected: true, since: s.since, ...info });
+  });
+
+  /* ---------- chat ---------- */
+  tool("chat_read", {
+    title: "Read chat",
+    description: "The most recent chat messages (newest last): who spoke, the text, roll totals, whisper targets.",
+    inputSchema: { limit: z.number().int().min(1).max(100).default(20).describe("How many messages"), since: z.string().optional().describe("Only messages after this message id") },
+    annotations: READ
+  }, async ({ limit, since }) => json(await foundry.eval(({ limit, since }) => {
+    let list = game.messages.contents;
+    if (since) { const i = list.findIndex(m => m.id === since); if (i >= 0) list = list.slice(i + 1); }
+    return list.slice(-limit).map(m => ({
+      id: m.id, time: new Date(m.timestamp).toISOString(), user: m.author?.name ?? m.user?.name ?? null, speaker: m.speaker?.alias ?? null,
+      whisperTo: (m.whisper ?? []).map(id => game.users.get(id)?.name ?? id), blind: !!m.blind,
+      flavor: __bridge.text(m.flavor ?? ""), text: __bridge.text(m.content).slice(0, 2000),
+      rolls: (m.rolls ?? []).map(r => ({ formula: r.formula, total: r.total }))
+    }));
+  }, { limit, since })));
+
+  tool("chat_send", {
+    title: "Send chat",
+    description: "Post a chat message as the bridge user. mode: public (everyone), gm (GMs only), or whisper (named users). Plain text; line breaks kept.",
+    inputSchema: {
+      text: z.string().min(1).max(4000), mode: z.enum(["public", "gm", "whisper"]).default("public"),
+      to: z.array(z.string()).optional().describe("User names for whisper"), alias: z.string().max(60).optional().describe("Speaker name shown, default the bridge user")
+    }, annotations: WRITE
+  }, async ({ text, mode, to, alias }) => json(await foundry.eval(async ({ text, mode, to, alias }) => {
+    const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])).replace(/\n/g, "<br>");
+    const data = { content: esc(text), speaker: { alias: alias || game.user.name } };
+    if (mode === "gm") ChatMessage.applyMode(data, "gm");
+    else if (mode === "whisper") {
+      const ids = (to ?? []).map(n => game.users.find(u => u.name === n)?.id).filter(Boolean);
+      if (!ids.length) throw new Error("whisper needs at least one known user name");
+      data.whisper = ids;
+    }
+    const m = await ChatMessage.create(data);
+    return { id: m.id, mode };
+  }, { text, mode, to, alias })));
+
+  tool("roll", {
+    title: "Roll dice",
+    description: "Roll a dice formula (Foundry syntax, e.g. 1d20+5, 4d6kh3) and post it to chat. mode: public, gm, blind or self.",
+    inputSchema: { formula: z.string().min(1).max(200), flavor: z.string().max(200).optional(), mode: z.enum(["public", "gm", "blind", "self"]).default("public") },
+    annotations: WRITE
+  }, async ({ formula, flavor, mode }) => json(await foundry.eval(async ({ formula, flavor, mode }) => {
+    const r = await new Roll(formula).evaluate();
+    await r.toMessage({ flavor: flavor ?? "", speaker: { alias: game.user.name } }, { messageMode: mode });
+    return { formula: r.formula, total: r.total, dice: r.dice.map(d => ({ faces: d.faces, results: d.results.map(x => x.result) })) };
+  }, { formula, flavor, mode })));
+
+  /* ---------- actors ---------- */
+  tool("actors_list", {
+    title: "List actors",
+    description: "Actors in the world: id, name, type, level, HP. Filter by type (character, npc, hazard, loot, party, vehicle) or a name fragment.",
+    inputSchema: { type: z.string().optional(), name: z.string().optional(), limit: z.number().int().min(1).max(200).default(50) },
+    annotations: READ
+  }, async (a) => json(await foundry.eval(({ type, name, limit }) => {
+    const q = name?.toLowerCase();
+    return game.actors.contents.filter(x => (!type || x.type === type) && (!q || x.name.toLowerCase().includes(q))).slice(0, limit)
+      .map(x => ({ id: x.id, name: x.name, type: x.type, level: x.system?.details?.level?.value ?? null,
+        hp: x.system?.attributes?.hp ? `${x.system.attributes.hp.value}/${x.system.attributes.hp.max}` : null, folder: x.folder?.name ?? null }));
+  }, a)));
+
+  tool("actor_get", {
+    title: "Actor details",
+    description: "One actor by id or exact name: level, HP, AC, saves, perception, speed, conditions, effects, and a short inventory and spell summary.",
+    inputSchema: { id: z.string().optional(), name: z.string().optional() }, annotations: READ
+  }, async ({ id, name }) => json(await foundry.eval(({ id, name }) => {
+    const a = id ? game.actors.get(id) : game.actors.getName(name);
+    if (!a) throw new Error("No such actor.");
+    const s = a.system ?? {}, at = s.attributes ?? {};
+    const items = a.items.contents;
+    const kinds = t => items.filter(i => i.type === t);
+    return {
+      id: a.id, name: a.name, type: a.type, level: s.details?.level?.value ?? null,
+      hp: at.hp ? { value: at.hp.value, max: at.hp.max, temp: at.hp.temp } : null, ac: at.ac?.value ?? null,
+      saves: s.saves ? Object.fromEntries(Object.entries(s.saves).map(([k, v]) => [k, v.value ?? v.totalModifier ?? null])) : null,
+      perception: s.perception?.value ?? s.perception?.mod ?? null, speed: at.speed?.value ?? null,
+      heroPoints: s.resources?.heroPoints?.value ?? null, xp: s.details?.xp?.value ?? null,
+      conditions: kinds("condition").map(c => c.name + (c.value ? ` ${c.value}` : "")),
+      effects: kinds("effect").map(e => e.name),
+      classes: kinds("class").map(c => c.name), ancestry: kinds("ancestry").map(c => c.name)[0] ?? null,
+      weapons: kinds("weapon").slice(0, 12).map(w => w.name), armor: kinds("armor").map(w => w.name),
+      consumables: kinds("consumable").slice(0, 20).map(c => `${c.name}${c.quantity > 1 ? " ×" + c.quantity : ""}`),
+      spells: kinds("spell").slice(0, 40).map(sp => `${sp.name} (${sp.system?.level?.value ?? sp.level ?? "?"})`),
+      feats: kinds("feat").slice(0, 40).map(f => f.name),
+      strikes: (s.actions ?? []).slice(0, 8).map(x => ({ name: x.label, bonus: x.totalModifier ?? null }))
+    };
+  }, { id, name })));
+
+  /* ---------- scenes and tokens ---------- */
+  tool("scenes_list", {
+    title: "List scenes",
+    description: "Scenes with id, name, whether active, and token count.", inputSchema: {}, annotations: READ
+  }, async () => json(await foundry.eval(() => game.scenes.contents.map(s => ({ id: s.id, name: s.name, active: s.active, navigation: s.navigation, tokens: s.tokens.size, size: `${s.width}×${s.height}` })))));
+
+  tool("scene_activate", {
+    title: "Activate scene",
+    description: "Make a scene the active one (players are moved to it).", inputSchema: { id: z.string() }, annotations: WRITE
+  }, async ({ id }) => json(await foundry.eval(async ({ id }) => { const s = game.scenes.get(id); if (!s) throw new Error("No such scene."); await s.activate(); return { active: s.name }; }, { id })));
+
+  tool("scene_view", {
+    title: "View scene (bridge client)",
+    description: "Point the bridge's own client at a scene without changing what players see. Needed before canvas-based tools (fog, map module) on that scene.",
+    inputSchema: { id: z.string() }, annotations: WRITE
+  }, async ({ id }) => json(await foundry.eval(async ({ id }) => { const s = game.scenes.get(id); if (!s) throw new Error("No such scene."); await s.view(); await new Promise(r => setTimeout(r, 1500)); return { viewing: canvas.scene?.name }; }, { id }, { timeout: 120000 })));
+
+  tool("tokens_list", {
+    title: "List tokens",
+    description: "Tokens on a scene (default: the active scene): id, name, position, hidden, HP, actor id.",
+    inputSchema: { sceneId: z.string().optional() }, annotations: READ
+  }, async ({ sceneId }) => json(await foundry.eval(({ sceneId }) => {
+    const s = sceneId ? game.scenes.get(sceneId) : game.scenes.active; if (!s) throw new Error("No such scene.");
+    return { scene: s.name, grid: s.grid.size, tokens: s.tokens.contents.map(t => ({ id: t.id, name: t.name, x: t.x, y: t.y, hidden: t.hidden, actorId: t.actorId,
+      hp: t.actor?.system?.attributes?.hp ? `${t.actor.system.attributes.hp.value}/${t.actor.system.attributes.hp.max}` : null, disposition: t.disposition })) };
+  }, { sceneId })));
+
+  tool("token_move", {
+    title: "Move token",
+    description: "Move a token to scene coordinates (top-left of the token, in pixels). Walls stop the move as they would for a player.",
+    inputSchema: { sceneId: z.string().optional(), id: z.string(), x: z.number(), y: z.number(), animate: z.boolean().default(true) }, annotations: WRITE
+  }, async (a) => json(await foundry.eval(async ({ sceneId, id, x, y, animate }) => {
+    const s = sceneId ? game.scenes.get(sceneId) : game.scenes.active; const t = s?.tokens.get(id); if (!t) throw new Error("No such token.");
+    await t.update({ x, y }, { animate }); await new Promise(r => setTimeout(r, animate ? 1500 : 200));
+    const now = s.tokens.get(id); return { id, x: now.x, y: now.y, arrived: now.x === x && now.y === y };
+  }, a, { timeout: 30000 })));
+
+  /* ---------- combat ---------- */
+  tool("combat_get", {
+    title: "Combat state",
+    description: "The active encounter: round, whose turn, and each combatant's initiative, HP and conditions.", inputSchema: {}, annotations: READ
+  }, async () => json(await foundry.eval(() => {
+    const c = game.combat; if (!c) return { active: false };
+    return { active: true, started: c.started, round: c.round, turn: c.turn, current: c.combatant?.name ?? null,
+      combatants: c.turns.map(x => ({ id: x.id, name: x.name, initiative: x.initiative, defeated: x.defeated, hidden: x.hidden,
+        hp: x.actor?.system?.attributes?.hp ? `${x.actor.system.attributes.hp.value}/${x.actor.system.attributes.hp.max}` : null,
+        conditions: (x.actor?.itemTypes?.condition ?? []).map(k => k.name + (k.value ? " " + k.value : "")) })) };
+  })));
+
+  /* ---------- journals ---------- */
+  tool("journal_search", {
+    title: "Search journals",
+    description: "Journal entries whose name or page text contains the query. Returns ids and page names.",
+    inputSchema: { query: z.string().min(1), limit: z.number().int().min(1).max(50).default(20) }, annotations: READ
+  }, async ({ query, limit }) => json(await foundry.eval(({ query, limit }) => {
+    const q = query.toLowerCase(), out = [];
+    for (const j of game.journal.contents) {
+      const pages = j.pages.contents.filter(p => p.name.toLowerCase().includes(q) || (p.type === "text" && __bridge.text(p.text?.content ?? "").toLowerCase().includes(q)));
+      if (j.name.toLowerCase().includes(q) || pages.length) out.push({ id: j.id, name: j.name, folder: j.folder?.name ?? null, pages: (pages.length ? pages : j.pages.contents).map(p => ({ id: p.id, name: p.name, type: p.type })) });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }, { query, limit })));
+
+  tool("journal_get", {
+    title: "Read a journal page",
+    description: "Text of a journal entry (all text pages, or one page by id), as plain text. GM-only secret sections are included and marked.",
+    inputSchema: { id: z.string(), pageId: z.string().optional(), maxChars: z.number().int().min(500).max(40000).default(12000) }, annotations: READ
+  }, async ({ id, pageId, maxChars }) => json(await foundry.eval(({ id, pageId, maxChars }) => {
+    const j = game.journal.get(id); if (!j) throw new Error("No such journal.");
+    const pages = pageId ? [j.pages.get(pageId)].filter(Boolean) : j.pages.contents;
+    let text = "";
+    for (const p of pages) {
+      if (p.type !== "text") { text += `\n## ${p.name} (${p.type})\n`; continue; }
+      const html = (p.text?.content ?? "").replace(/<section class="secret"[^>]*>/g, "\n[GM secret]\n").replace(/<\/section>/g, "\n[end secret]\n");
+      text += `\n## ${p.name}\n${__bridge.text(html)}\n`;
+    }
+    return { id: j.id, name: j.name, text: text.slice(0, maxChars), truncated: text.length > maxChars };
+  }, { id, pageId, maxChars })));
+
+  /* ---------- the map module (Lythara Survey Sheet) ---------- */
+  const mapApi = `const api = game.modules.get("lythara-survey-sheet")?.api; if (!api) throw new Error("The Lythara Survey Sheet module isn't active in this world.");`;
+
+  tool("map_sheet_create", {
+    title: "Make a map sheet",
+    description: "Lythara Survey Sheet: make a detailed scene from World Map hexes [{i,j}] (row, column). Runs as a job; poll job_status.",
+    inputSchema: { hexes: z.array(z.object({ i: z.number().int(), j: z.number().int() })).min(1).max(12), name: z.string().max(80).optional(), margin: z.number().min(0).max(6).optional() }, annotations: WRITE
+  }, async (a) => json(await foundry.eval(new Function("a", `${mapApi} return { job: __bridge.startJob("map_sheet_create", api.createSheet(a)) };`), a)));
+
+  tool("map_sheet_render", {
+    title: "Redraw a map sheet",
+    description: "Lythara Survey Sheet: redraw a sheet scene's map (force to redraw even if unchanged). Runs as a job; poll job_status.",
+    inputSchema: { sceneId: z.string(), force: z.boolean().default(false) }, annotations: WRITE
+  }, async ({ sceneId, force }) => json(await foundry.eval(new Function("a", `${mapApi} const s = game.scenes.get(a.sceneId); if (!s) throw new Error("No such scene."); return { job: __bridge.startJob("map_sheet_render", api.renderSheet(s, { force: a.force })) };`), { sceneId, force })));
+
+  tool("map_exploration_sync", {
+    title: "Carry exploration",
+    description: "Lythara Survey Sheet: read what the players have explored on every sheet and reveal it on all sheets and the World Map. Runs as a job.",
+    inputSchema: {}, annotations: WRITE
+  }, async () => json(await foundry.eval(new Function(`${mapApi} return { job: __bridge.startJob("map_exploration_sync", api.syncExploration()), exploredSqMi: api.exploredArea() };`))));
+
+  tool("map_sheet_export", {
+    title: "Export a map sheet",
+    description: "Lythara Survey Sheet: the sheet's frame, hexes, survey slice, pins, lines, paint and fingerprint, for the Survey Sheet artifact.",
+    inputSchema: { sceneId: z.string() }, annotations: READ
+  }, async ({ sceneId }) => json(await foundry.eval(new Function("a", `${mapApi} const s = game.scenes.get(a.sceneId); if (!s) throw new Error("No such scene."); return api.exportSheet(s);`), { sceneId })));
+
+  tool("map_sheet_apply", {
+    title: "Apply map data",
+    description: "Lythara Survey Sheet: apply {seed?, pins?, lines?, paint?} from the Survey Sheet artifact to the world and redraw affected sheets. Runs as a job.",
+    inputSchema: { data: z.record(z.any()), sceneId: z.string().optional().describe("Only this sheet; default all sheets") }, annotations: WRITE
+  }, async ({ data, sceneId }) => json(await foundry.eval(new Function("a", `${mapApi} const s = a.sceneId ? game.scenes.get(a.sceneId) : undefined; return { job: __bridge.startJob("map_sheet_apply", api.applySheet(a.data, s)) };`), { data, sceneId })));
+
+  tool("job_status", {
+    title: "Job status",
+    description: "Result of a long-running job started by another tool (map sheets, exploration).",
+    inputSchema: { job: z.string() }, annotations: READ
+  }, async ({ job }) => json(await foundry.eval(({ job }) => {
+    const j = __bridge.jobs[job]; if (!j) throw new Error("Unknown job.");
+    const out = { id: j.id, name: j.name, done: j.done, seconds: Math.round((Date.now() - j.started) / 1000) };
+    if (j.done) { if (j.error) out.error = j.error; else out.result = JSON.parse(JSON.stringify(j.result ?? null, (k, v) => (typeof v === "string" && v.length > 4000) ? v.slice(0, 4000) + "…" : v)); }
+    return out;
+  }, { job })));
+
+  /* ---------- scripts: only when the owner allows it in config.json ---------- */
+  if (cfg.allowScripts) tool("run_script", {
+    title: "Run a script in Foundry",
+    description: "Run JavaScript inside the Foundry client as the bridge user and return its JSON result. Enabled by the owner in config.json.",
+    inputSchema: { code: z.string().min(1).max(20000).describe("An async function body; `game`, `canvas`, `ui` are available. Return a JSON-serialisable value.") }, annotations: { ...WRITE, destructiveHint: true }
+  }, async ({ code }) => json(await foundry.eval(new Function("code", `return (new (Object.getPrototypeOf(async function(){}).constructor)(code))();`), code, { timeout: 120000 })));
+}
