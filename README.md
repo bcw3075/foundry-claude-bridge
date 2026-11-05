@@ -52,3 +52,6 @@ Replace the files (keep `config.json` and `data/`), run `npm install`, restart t
 ## Testing without Foundry
 
 `npm test` runs the bridge against a stub Foundry and checks the OAuth handshake and every tool. It needs Playwright's Chromium (`npx playwright install chromium`).
+
+## Changing the code
+See [docs/DEVELOPING.md](docs/DEVELOPING.md): how it works, what it relies on, testing and releasing.
