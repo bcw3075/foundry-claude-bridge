@@ -44,10 +44,11 @@ One Node program on the machine that runs Foundry. It keeps a hidden Chromium pa
 2. Then test live through the connector, in the test world: status, every changed tool, a script if scripts are on, and a map job if map tools changed. Say which tools were not exercised live.
 
 ## Releasing
-1. Bump `version` in `package.json` and in the `McpServer` constructor in `src/server.mjs`.
-2. Commit and push.
-3. Build a zip without `node_modules`, `config.json` or `data/`.
-4. The owner unzips it over the install folder, keeping `config.json` and `data/`. They run `npm install` if dependencies changed, then restart the bridge window. If tools changed, they reconnect the connector.
+1. Bring this file up to date with the change: run `python3 tools/doccheck.py` (it lists names this file mentions that are no longer in the code; `WWW-Authenticate` is expected, the SDK sets it) and reread the sections the change touched.
+2. Bump `version` in `package.json` and in the `McpServer` constructor in `src/server.mjs`.
+3. Commit and push.
+4. Build a zip without `node_modules`, `config.json` or `data/`.
+5. The owner unzips it over the install folder, keeping `config.json` and `data/`. They run `npm install` if dependencies changed, then restart the bridge window. If tools changed, they reconnect the connector.
 
 ## Keep out of this repo
 `config.json`, `data/`, and any campaign content. The repo is public.
