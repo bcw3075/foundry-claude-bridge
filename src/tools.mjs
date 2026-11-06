@@ -335,12 +335,27 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
     tool("session", {
       title: "Test session",
       description: `Start or end a hidden sign-in as a test account, in its own browser (separate from the bridge's), with its own cookie. gm = "${cfg.uiAccounts.gm}", player = "${cfg.uiAccounts.player}". Refuses an account that is already logged in elsewhere. status lists both.`,
-      inputSchema: { action: z.enum(["start", "stop", "status"]).default("status"), account: z.enum(["gm", "player"]).optional().describe("Which session; needed for start and stop") },
+      inputSchema: {
+        action: z.enum(["start", "stop", "status"]).default("status"), account: z.enum(["gm", "player"]).optional().describe("Which session; needed for start and stop"),
+        force: z.boolean().default(false).describe("Needed to stop a session that is Encounter Builder's runner (that takes the runner offline)"), testingTurn: z.boolean().default(false)
+      },
       annotations: WRITE
-    }, async ({ action, account }) => {
+    }, async ({ action, account, force, testingTurn }) => {
       if (action === "status") return json(sessions.status());
       if (!account) throw new Error(`session ${action} needs account: gm or player`);
-      if (action === "stop") return json(await sessions.stop(account));
+      if (action === "stop") {
+        /* stopping the runner's own session is heavier than a reload there: same rule (force, and not while a turn is busy) */
+        let warning;
+        if (foundry.state === "ready" && sessions.sessions[account]?.state !== "stopped") {
+          const { runner } = await foundry.eval(worldAndRunner);
+          if (runner && runner === sessions.accountOf(account)) {
+            await guard({ target: account, input: true, force, testingTurn });
+            warning = `"${runner}" is Encounter Builder's runner: with this session stopped, monster turns have no page to run on until it is started again (or the runner setting is changed).`;
+          }
+        }
+        const r = await sessions.stop(account);
+        return json(warning ? { ...r, warning } : r);
+      }
       await guard({ target: "bridge" });   /* connected, and the world is allowed */
       return json(await sessions.start(account, onlineName));
     });
@@ -363,7 +378,7 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
           ms: z.number().int().min(0).max(10000).optional().describe("wait: how long"), dx: z.number().optional(), dy: z.number().optional().describe("scroll: wheel distance"),
           steps: z.number().int().min(2).max(60).optional().describe("drag: how many moves"), timeoutMs: z.number().int().min(100).max(30000).optional()
         })).min(1).max(20),
-        force: z.boolean().default(false).describe("Required for input on the runner's page"), testingTurn: z.boolean().default(false).describe("Only when deliberately testing input during a monster turn")
+        force: z.boolean().default(false).describe("Required for input on the runner's page"), testingTurn: z.boolean().default(false).describe("With force: also act while a monster turn is busy. For testing that case, or for clearing a turn that has hung (which doesn't need a bridge restart)")
       }, annotations: WRITE
     }, async ({ target, steps, force, testingTurn }) => json(await ui.act(await guard({ target, input: true, force, testingTurn }), steps)));
 

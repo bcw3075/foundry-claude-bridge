@@ -183,6 +183,13 @@ try {
   r = await call("ui_act", { target: "gm", steps: [{ do: "click", button: "Count" }] }); check("the runner setting moves the guard to that session", !r.ok && /"AI" is the runner's page/.test(r.text), r.text.slice(0, 120));
   r = await call("ui_act", { target: "bridge", steps: [{ do: "click", button: "Count" }] }); check("…and frees the bridge's page", r.ok && r.data.ok, r.text.slice(0, 120));
   r = await call("ui_read", { target: "runner" }); check("target runner follows the setting", r.ok && r.data.user === "AI", r.text.slice(0, 80));
+  r = await call("session", { action: "stop", account: "gm" }); check("stopping the runner's session needs force", !r.ok && /runner's page/.test(r.text), r.text.slice(0, 120));
+  await script("window.__stubFight = { state: 'running' }; return 1");
+  r = await call("session", { action: "stop", account: "gm", force: true }); check("…and is refused while a turn is busy", !r.ok && /turn is busy/.test(r.text), r.text.slice(0, 120));
+  await script("window.__stubFight = null; return 1");
+  r = await call("session", { action: "stop", account: "gm", force: true }); check("forced stop of the runner's session warns", r.ok && r.data.stopped && /runner/.test(r.data.warning ?? ""), r.text.slice(0, 200));
+  await new Promise(x => setTimeout(x, 1500));   /* the world needs a moment to see the login drop */
+  r = await call("session", { action: "start", account: "gm" }); check("runner session started again", r.ok && r.data.state === "ready", r.text.slice(0, 100));
   await script("window.__stubSettings = {}; return 1");
   r = await call("ui_read", { target: "runner" }); check("target runner is the bridge by default", r.ok && r.data.user === "Claude Bridge", r.text.slice(0, 80));
 
