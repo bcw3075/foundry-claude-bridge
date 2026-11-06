@@ -11,6 +11,7 @@ import { loadConfig } from "./config.mjs";
 import { BridgeAuthProvider } from "./auth.mjs";
 import { FoundryClient } from "./foundry.mjs";
 import { registerTools } from "./tools.mjs";
+import { SessionManager } from "./sessions.mjs";
 
 const cfg = loadConfig();
 if (!cfg.passphrase) { console.error("No approval passphrase set. Run: npm run setup"); process.exit(1); }
@@ -24,6 +25,8 @@ const audit = rec => fs.appendFile(auditFile, JSON.stringify({ time: new Date().
 
 /* ---- Foundry client ---- */
 const foundry = new FoundryClient(cfg, log);
+/* hidden test sessions in a second browser, only when the owner allows them */
+const sessions = cfg.allowUi ? new SessionManager(cfg, log) : null;
 
 /* ---- HTTP ---- */
 const app = express();
@@ -45,9 +48,10 @@ app.get("/health", (req, res) => res.json({ ok: true, foundry: foundry.state, si
 const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
 app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
   /* stateless: a fresh MCP server per request, so no session table and nothing to leak between calls */
-  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.1.4" }, { instructions:
-    "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status." });
-  registerTools(server, foundry, cfg, audit);
+  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.2.0" }, { instructions:
+    "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status. "
+    + (cfg.allowUi ? "The session, ui_* and client_tools tools act on hidden test sessions (gm, player) with real input; the runner's page is left alone unless forced." : "") });
+  registerTools(server, foundry, cfg, audit, sessions);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
   try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
@@ -61,7 +65,7 @@ const servers = [];
 const listen = (host) => new Promise(res => { const s = app.listen(cfg.port, host, () => { log("http", `listening on http://${host.includes(":") ? "[" + host + "]" : host}:${cfg.port}`); res(s); }); s.on("error", e => { log("http", `can't listen on ${host}: ${e.message}`); res(null); }); });
 for (const h of ["127.0.0.1", "::1"]) { const s = await listen(h); if (s) servers.push(s); }
 if (!servers.length) { console.error("Could not open the port."); process.exit(1); }
-log("http", `public ${cfg.publicUrl}, scripts ${cfg.allowScripts ? "ALLOWED" : "off"}`);
+log("http", `public ${cfg.publicUrl}, scripts ${cfg.allowScripts ? "ALLOWED" : "off"}, ui ${cfg.allowUi ? "ALLOWED (" + cfg.uiWorlds.join(", ") + ")" : "off"}`);
 foundry.start();
-const shutdown = async () => { log("http", "stopping"); for (const s of servers) s.close(); await foundry.stop(); process.exit(0); };
+const shutdown = async () => { log("http", "stopping"); for (const s of servers) s.close(); await sessions?.stopAll(); await foundry.stop(); process.exit(0); };
 process.on("SIGINT", shutdown); process.on("SIGTERM", shutdown);

@@ -2,7 +2,7 @@
 
 A small program that runs on the same computer as Foundry VTT and gives Claude a set of tools inside your world: read and send chat, roll dice, look up actors, scenes, tokens, combat and journals, and drive the Lythara Survey Sheet map module. It keeps its own hidden browser logged into Foundry as a GM user, and exposes the tools to Claude as a custom connector (MCP over HTTPS, OAuth sign-in).
 
-Nothing in it deletes documents, changes settings or installs modules. Running arbitrary scripts is off unless you turn it on in `config.json`. Every call is written to `data/audit.log`.
+Nothing in it deletes documents, changes settings or installs modules. Running arbitrary scripts is off unless you turn it on in `config.json`, and so are the test sessions (hidden sign-ins as two test accounts, with real mouse and keyboard input and screenshots, for testing modules without a visible browser). Every call is written to `data/audit.log`.
 
 ## What you need
 
@@ -37,17 +37,19 @@ Task Scheduler → Create Basic Task → "Foundry Bridge" → trigger **When I l
 
 ## Files
 
-- `config.json` — your settings (made by `npm run setup`). `allowScripts: true` enables the `run_script` tool.
+- `config.json` — your settings (made by `npm run setup`). `allowScripts: true` enables the `run_script` tool. `allowUi: true` enables the test sessions and the `session`, `ui_act`, `ui_read`, `ui_look`, `ui_wait` and `client_tools` tools; `uiWorlds` (default `["pf2-test"]`) names the only worlds they work in, and `uiAccounts` (default `{"gm": "AI", "player": "Test Player"}`) the two accounts they sign in as. Those accounts must exist in the world, have no password, and not be the bridge's own user.
 - `data/audit.log` — one line per tool call: time, tool, arguments, result.
 - `data/bridge.log` — connection events. `data/tokens.json`, `data/clients.json` — Claude's connections.
 
 ## Tools
 
-`foundry_status`, `chat_read`, `chat_send`, `roll`, `actors_list`, `actor_get`, `scenes_list`, `scene_activate`, `scene_view`, `tokens_list`, `token_move`, `combat_get`, `journal_search`, `journal_get`, `map_sheet_create`, `map_sheet_render`, `map_exploration_sync`, `map_sheet_export`, `map_sheet_apply`, `job_status`, and `run_script` when allowed.
+`foundry_status`, `chat_read`, `chat_send`, `roll`, `actors_list`, `actor_get`, `scenes_list`, `scene_activate`, `scene_view`, `tokens_list`, `token_move`, `combat_get`, `journal_search`, `journal_get`, `map_sheet_create`, `map_sheet_render`, `map_exploration_sync`, `map_sheet_export`, `map_sheet_apply`, `job_status`, `run_script` when scripts are allowed, and with `allowUi`: `session`, `ui_act`, `ui_read`, `ui_look`, `ui_wait`, `client_tools`.
+
+The test sessions run in a second hidden browser, separate from the bridge's own page, one sign-in per account with its own cookie. `session` refuses to start for an account that is already logged in somewhere, so it never logs you out of a tab. The bridge's own page (or whichever page the Lythara Encounter Builder names as its runner) only takes input or a reload with `force: true`, and never while that module is running a monster turn.
 
 ## Updating
 
-Replace the files (keep `config.json` and `data/`), run `npm install`, restart the bridge.
+Replace the files (keep `config.json` and `data/`), run `npm install`, restart the bridge. If the tool list changed, remove and re-add the connector in Claude.
 
 ## Testing without Foundry
 

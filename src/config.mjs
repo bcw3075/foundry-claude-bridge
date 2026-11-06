@@ -21,6 +21,14 @@ const DEFAULTS = {
   passphrase: null,
   /* let Claude run arbitrary JavaScript in the Foundry client. Off unless the owner turns it on here. */
   allowScripts: false,
+  /* let Claude open hidden test sessions and use real input and screenshots (the session, ui_* and client_tools tools).
+     Off unless the owner turns it on here. */
+  allowUi: false,
+  /* the UI tools only work while one of these worlds is running (world ids) */
+  uiWorlds: ["pf2-test"],
+  /* the Foundry accounts the two test sessions join as. Neither may be the bridge's own account, and the tools refuse
+     to start a session for an account that is already logged in elsewhere. No passwords: these accounts have none. */
+  uiAccounts: { gm: "AI", player: "Test Player" },
   /* run Chromium without a window */
   headless: true,
   /* which Chromium to run: "chromium" (full browser, new headless mode, can use the GPU) or "" (Playwright's headless shell, software drawing) */

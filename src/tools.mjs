@@ -1,15 +1,39 @@
 /* The tools Claude gets. Each one runs a self-contained function inside the Foundry page.
    Reads are free; writes are the few the GM asked for; nothing here deletes documents. */
 import { z } from "zod";
+import * as ui from "./ui.mjs";
 
 const json = v => ({ content: [{ type: "text", text: typeof v === "string" ? v : JSON.stringify(v, null, 1) }] });
+/* an image plus a short JSON note; the image is returned to the caller and never written anywhere */
+const picture = (img, note) => ({ content: [{ type: "image", data: img.data, mimeType: img.mimeType }, { type: "text", text: JSON.stringify(note) }] });
 const fail = msg => ({ isError: true, content: [{ type: "text", text: msg }] });
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 /* ---------- in-page helpers, duplicated in each function that needs them (functions must be self-contained) ---------- */
 
-export function registerTools(server, foundry, cfg, audit) {
+/** Is Encounter Builder running a monster turn? Uses its busy() when the module offers one, else reads the turn requests. */
+function fightBusy() {
+  const m = game.modules.get("lythara-encounter-builder");
+  if (!m?.active || !m.api?.fight) return { busy: false, module: false };
+  if (typeof m.api.fight.busy === "function") { const b = m.api.fight.busy(); return { busy: !!b, via: "busy()", detail: b || null }; }
+  const combats = (game.combats?.contents ?? []).filter(c => c.started);
+  for (const c of combats) {
+    const r = typeof m.api.fight.current === "function" ? m.api.fight.current(c) : null;
+    if (r && (r.state === "running" || r.state === "submitted" || r.go)) return { busy: true, via: "current()", combat: c.id, state: r.state, go: !!r.go };
+  }
+  return { busy: false, via: "current()" };
+}
+
+/** The running world and the account Encounter Builder calls the runner (null when the module is off). */
+function worldAndRunner() {
+  let runner = null;
+  const m = game.modules.get("lythara-encounter-builder");
+  if (m?.active) { try { runner = game.settings.get("lythara-encounter-builder", "runner") || null; } catch { runner = null; } }
+  return { world: game.world.id, runner };
+}
+
+export function registerTools(server, foundry, cfg, audit, sessions = null) {
   const tool = (name, def, run) => server.registerTool(name, def, async (args) => {
     const t0 = Date.now();
     try {
@@ -40,7 +64,7 @@ export function registerTools(server, foundry, cfg, audit) {
       worldTime: game.time.worldTime,
       modules: [...game.modules].filter(m => m.active).map(m => `${m.id} ${m.version}`)
     }));
-    return json({ connected: true, since: s.since, ...info });
+    return json({ connected: true, since: s.since, ...info, ui: cfg.allowUi ? { enabled: true, worlds: cfg.uiWorlds, ...(sessions?.status() ?? {}) } : { enabled: false } });
   });
 
   /* ---------- chat ---------- */
@@ -244,11 +268,29 @@ export function registerTools(server, foundry, cfg, audit) {
     inputSchema: { data: z.record(z.any()), sceneId: z.string().optional().describe("Only this sheet; default all sheets") }, annotations: WRITE
   }, async ({ data, sceneId }) => json(await foundry.eval(new Function("a", `${mapApi} const s = a.sceneId ? game.scenes.get(a.sceneId) : undefined; return { job: __bridge.startJob("map_sheet_apply", api.applySheet(a.data, s)) };`), { data, sceneId })));
 
+  /* ---------- which hidden page a call acts on ---------- */
+  const TARGET = z.enum(["bridge", "gm", "player", "runner"]);
+  const targetDoc = "bridge = the bridge's own page (default); gm / player = a started test session; runner = whichever page Encounter Builder's runner setting names.";
+  /** The client (bridge or session) for a target name. */
+  const clientFor = async (target = "bridge") => {
+    if (target === "bridge") { if (foundry.state !== "ready") throw new Error(`Foundry isn't connected (${foundry.state}${foundry.lastError ? ": " + foundry.lastError : ""}).`); return foundry; }
+    if (!cfg.allowUi || !sessions) throw new Error("Test sessions are off: set \"allowUi\": true in config.json and restart the bridge.");
+    if (target === "runner") {
+      const { runner } = await foundry.eval(worldAndRunner);
+      const name = runner ?? cfg.foundryUser;
+      if (name === cfg.foundryUser) return foundry;
+      const key = Object.keys(cfg.uiAccounts).find(k => cfg.uiAccounts[k] === name);
+      if (!key) throw new Error(`The runner is "${name}", which is neither the bridge's account nor a session account.`);
+      return sessions.get(key);
+    }
+    return sessions.get(target);
+  };
+
   tool("job_status", {
     title: "Job status",
-    description: "Result of a long-running job started by another tool (map sheets, exploration).",
-    inputSchema: { job: z.string() }, annotations: READ
-  }, async ({ job }) => json(await foundry.eval(({ job }) => {
+    description: "Result of a long-running job started by another tool (map sheets, exploration, a background script).",
+    inputSchema: { job: z.string(), target: TARGET.default("bridge").describe("The page the job was started on") }, annotations: READ
+  }, async ({ job, target }) => json(await (await clientFor(target)).eval(({ job }) => {
     const j = __bridge.jobs[job]; if (!j) throw new Error("Unknown job.");
     const out = { id: j.id, name: j.name, done: j.done, seconds: Math.round((Date.now() - j.started) / 1000) };
     if (j.done) { if (j.error) out.error = j.error; else out.result = JSON.parse(JSON.stringify(j.result ?? null, (k, v) => (typeof v === "string" && v.length > 4000) ? v.slice(0, 4000) + "…" : v)); }
@@ -258,7 +300,121 @@ export function registerTools(server, foundry, cfg, audit) {
   /* ---------- scripts: only when the owner allows it in config.json ---------- */
   if (cfg.allowScripts) tool("run_script", {
     title: "Run a script in Foundry",
-    description: "Run JavaScript inside the Foundry client as the bridge user and return its JSON result. Enabled by the owner in config.json.",
-    inputSchema: { code: z.string().min(1).max(20000).describe("An async function body; `game`, `canvas`, `ui` are available. Return a JSON-serialisable value.") }, annotations: { ...WRITE, destructiveHint: true }
-  }, async ({ code }) => json(await foundry.eval(new Function("code", `return (new (Object.getPrototypeOf(async function(){}).constructor)(code))();`), code, { timeout: 120000 })));
+    description: "Run JavaScript inside a Foundry client and return its JSON result. Enabled by the owner in config.json. Runs on the bridge's page unless target says otherwise; background: true returns a job id for job_status (same target) instead of waiting.",
+    inputSchema: {
+      code: z.string().min(1).max(20000).describe("An async function body; `game`, `canvas`, `ui` are available. Return a JSON-serialisable value."),
+      target: TARGET.default("bridge").describe(targetDoc),
+      background: z.boolean().default(false).describe("Start the script as a job and return at once; poll job_status with the same target")
+    }, annotations: { ...WRITE, destructiveHint: true }
+  }, async ({ code, target, background }) => {
+    const c = await clientFor(target);
+    if (background) return json(await c.eval(new Function("code", `return { job: __bridge.startJob("run_script", (new (Object.getPrototypeOf(async function(){}).constructor)(code))()) };`), code));
+    return json(await c.eval(new Function("code", `return (new (Object.getPrototypeOf(async function(){}).constructor)(code))();`), code, { timeout: 120000 }));
+  });
+
+  /* ---------- hidden test sessions and real input: only when the owner allows it in config.json ---------- */
+  if (cfg.allowUi && sessions) {
+    /** Checks every UI call makes: the bridge is connected, the world is one the owner allowed, and, for input or a reload
+        on the runner's page, that the caller forced it and no monster turn is busy. Returns the client to act on. */
+    const guard = async ({ target = "gm", input = false, force = false, testingTurn = false }) => {
+      if (foundry.state !== "ready") throw new Error(`Foundry isn't connected (${foundry.state}${foundry.lastError ? ": " + foundry.lastError : ""}), so the UI tools can't check the world or who is online.`);
+      const { world, runner } = await foundry.eval(worldAndRunner);
+      if (!cfg.uiWorlds.includes(world)) throw new Error(`The UI tools only work in ${cfg.uiWorlds.map(w => `"${w}"`).join(", ")} (uiWorlds in config.json); the running world is "${world}".`);
+      const client = await clientFor(target);
+      const runnerName = runner ?? cfg.foundryUser;
+      const isRunner = client.name === runnerName;
+      if (input && isRunner) {
+        if (!force) throw new Error(`"${client.name}" is the runner's page (Encounter Builder runs monster turns there), so input and reloads there need force: true. That is only for clearing a stuck prompt or a stale page; test through the gm or player session instead.`);
+        const busy = await foundry.eval(fightBusy);
+        if (busy.busy && !testingTurn) throw new Error(`A monster turn is busy on the runner's page (${busy.via}${busy.state ? ", state " + busy.state : ""}${busy.go ? ", go" : ""}); input was refused. Pass testingTurn: true only when the call is testing that case.`);
+      }
+      return client;
+    };
+    const onlineName = name => foundry.eval(n => !!game.users.getName(n)?.active, name);
+
+    tool("session", {
+      title: "Test session",
+      description: `Start or end a hidden sign-in as a test account, in its own browser (separate from the bridge's), with its own cookie. gm = "${cfg.uiAccounts.gm}", player = "${cfg.uiAccounts.player}". Refuses an account that is already logged in elsewhere. status lists both.`,
+      inputSchema: { action: z.enum(["start", "stop", "status"]).default("status"), account: z.enum(["gm", "player"]).optional().describe("Which session; needed for start and stop") },
+      annotations: WRITE
+    }, async ({ action, account }) => {
+      if (action === "status") return json(sessions.status());
+      if (!account) throw new Error(`session ${action} needs account: gm or player`);
+      if (action === "stop") return json(await sessions.stop(account));
+      await guard({ target: "bridge" });   /* connected, and the world is allowed */
+      return json(await sessions.start(account, onlineName));
+    });
+
+    const LOC = {
+      selector: z.string().max(300).optional().describe("CSS or Playwright selector"), button: z.string().max(120).optional().describe("A button by its visible name"),
+      text: z.string().max(200).optional().describe("Visible text"), at: z.object({ x: z.number(), y: z.number() }).optional().describe("Page pixels"),
+      scene: z.object({ x: z.number(), y: z.number() }).optional().describe("Scene coordinates on the canvas")
+    };
+    tool("ui_act", {
+      title: "Real input",
+      description: "A batch of real mouse and keyboard input on a hidden page: click, dblclick, rightclick, hover, drag (with `to`), type, fill, select, press, keydown, keyup (held keys), scroll, wait. Target a step by selector, button name, text, page pixels (at) or scene coordinates (scene). Stops at the first failing step and reports what opened or closed. On the runner's page it needs force: true and is refused while a monster turn is busy.",
+      inputSchema: {
+        target: TARGET.default("gm").describe(targetDoc),
+        steps: z.array(z.object({
+          do: z.enum(["click", "dblclick", "rightclick", "hover", "drag", "type", "fill", "select", "press", "keydown", "keyup", "scroll", "wait"]),
+          ...LOC, to: z.object(LOC).optional().describe("Where a drag ends"),
+          value: z.string().max(4000).optional().describe("Text for type/fill, option for select"), key: z.string().max(40).optional().describe("Key for press/keydown/keyup, e.g. Enter, Shift, Control+a"),
+          modifiers: z.array(z.enum(["Shift", "Control", "Alt", "Meta"])).optional().describe("Keys held during a click or drag"),
+          ms: z.number().int().min(0).max(10000).optional().describe("wait: how long"), dx: z.number().optional(), dy: z.number().optional().describe("scroll: wheel distance"),
+          steps: z.number().int().min(2).max(60).optional().describe("drag: how many moves"), timeoutMs: z.number().int().min(100).max(30000).optional()
+        })).min(1).max(20),
+        force: z.boolean().default(false).describe("Required for input on the runner's page"), testingTurn: z.boolean().default(false).describe("Only when deliberately testing input during a monster turn")
+      }, annotations: WRITE
+    }, async ({ target, steps, force, testingTurn }) => json(await ui.act(await guard({ target, input: true, force, testingTurn }), steps)));
+
+    tool("ui_read", {
+      title: "Read the screen",
+      description: "What is on a hidden page as text: open windows and dialogs with their buttons, fields and text; notifications; selected and targeted tokens; scene, tool, combat, pause state.",
+      inputSchema: { target: TARGET.default("gm").describe(targetDoc), maxChars: z.number().int().min(0).max(8000).default(1500).describe("Text per window"), windows: z.boolean().default(true) },
+      annotations: READ
+    }, async ({ target, maxChars, windows }) => json(await ui.read(await guard({ target }), { maxChars, windows })));
+
+    tool("ui_look", {
+      title: "Screenshot",
+      description: "A small JPEG of a hidden page: the whole screen, one window (by title), one element (by selector) or an area. Scaled to maxWidth. Returned to the caller, never stored.",
+      inputSchema: {
+        target: TARGET.default("gm").describe(targetDoc),
+        region: z.union([z.enum(["screen", "window", "element"]), z.object({ x: z.number(), y: z.number(), width: z.number().positive(), height: z.number().positive() })]).default("screen"),
+        title: z.string().max(120).optional().describe("region window: part of the window's title"), selector: z.string().max(300).optional().describe("region element"),
+        maxWidth: z.number().int().min(100).max(1600).default(1000), quality: z.number().int().min(20).max(90).default(60)
+      }, annotations: READ
+    }, async ({ target, ...opts }) => { const img = await ui.look(await guard({ target }), opts); return picture(img, { target, width: img.width, height: img.height, bytes: img.bytes, clip: img.clip }); });
+
+    tool("ui_wait", {
+      title: "Wait for a change",
+      description: "Wait on a hidden page for: a dialog, any window, a chat message, a scene change, a selector, a text, or any visible change on screen (for: screen; frames: true also returns the new frame). At most 90 s per call; returns what happened.",
+      inputSchema: {
+        target: TARGET.default("gm").describe(targetDoc), for: z.enum(["dialog", "window", "chat", "scene", "selector", "text", "screen"]),
+        selector: z.string().max(300).optional(), text: z.string().max(200).optional(), since: z.string().optional().describe("chat: the last message id already seen"),
+        maxSeconds: z.number().int().min(1).max(90).default(30), frames: z.boolean().default(false)
+      }, annotations: READ
+    }, async ({ target, ...opts }) => {
+      const r = await ui.wait(await guard({ target }), opts);
+      if (r.frame) { const { frame, ...rest } = r; return picture(frame, { ...rest, width: frame.width, height: frame.height }); }
+      return json(r);
+    });
+
+    tool("client_tools", {
+      title: "Client tools",
+      description: "console: the page's last console messages and errors. reload: reload a hidden page (clearCache: true also clears the browser cache, for module files Foundry caches for hours). A reload of the runner's page needs force: true and is refused while a monster turn is busy.",
+      inputSchema: {
+        target: TARGET.default("gm").describe(targetDoc), action: z.enum(["console", "reload"]),
+        errorsOnly: z.boolean().default(false), limit: z.number().int().min(1).max(200).default(50), clearCache: z.boolean().default(false),
+        force: z.boolean().default(false), testingTurn: z.boolean().default(false)
+      }, annotations: WRITE
+    }, async ({ target, action, errorsOnly, limit, clearCache, force, testingTurn }) => {
+      if (action === "console") {
+        const c = await guard({ target });
+        const list = errorsOnly ? c.console.filter(m => m.type === "error" || m.type === "pageerror") : c.console;
+        return json({ target, user: c.name, messages: list.slice(-limit) });
+      }
+      const c = await guard({ target, input: true, force, testingTurn });
+      return json({ target, user: c.name, ...(await c.reload({ clearCache })) });
+    });
+  }
 }
