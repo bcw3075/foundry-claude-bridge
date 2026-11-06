@@ -47,6 +47,13 @@ class Session {
 
   async close() {
     this.state = "stopped";
+    /* leave the game page first so its socket closes cleanly; closing the context (and then the browser) straight away
+       left the account shown as online in Foundry (seen live with AI, 2026-11-06) */
+    if (this.page && !this.page.isClosed()) {
+      await this.page.evaluate(() => { try { window.game?.socket?.disconnect(); } catch {} }).catch(() => {});
+      await this.page.goto("about:blank", { timeout: 5000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 300));
+    }
     await this.ctx?.close().catch(() => {});
     this.ctx = null; this.page = null; this.since = null;
   }
@@ -108,6 +115,7 @@ export class SessionManager {
     await s.close();
     if (Object.values(this.sessions).every(x => x.state === "stopped") && this.browser) {
       const b = this.browser; this.browser = null; this.browserSince = null;
+      await new Promise(r => setTimeout(r, 300));
       await b.close().catch(() => {});
       this.log("sessions", "session browser closed");
     }

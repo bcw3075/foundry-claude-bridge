@@ -5,8 +5,8 @@
 
 /* ---------- in-page functions ---------- */
 
-/** What is on screen: open windows (v2 and v1), notifications, selection, targets, scene, combat. */
-export function uiSnapshot({ maxChars = 1500, windows = true, ids = null } = {}) {
+/** What is on screen: open windows (v2 and v1, framed ones unless `all`), notifications, selection, targets, scene, combat. */
+export function uiSnapshot({ maxChars = 1500, windows = true, ids = null, all = false } = {}) {
   const clean = s => String(s ?? "").replace(/\s+/g, " ").trim();
   const list = [], seen = [];
   const add = (app, kind) => {
@@ -14,6 +14,9 @@ export function uiSnapshot({ maxChars = 1500, windows = true, ids = null } = {})
     if (seen.includes(id)) return;
     seen.push(id);
     if (ids && !ids.includes(id)) return;
+    /* Foundry registers every UI element (sidebar, hotbar, HUD) as an application; only framed ones are windows */
+    const framed = kind === "v2" ? app.hasFrame !== false : app.popOut !== false;
+    if (!all && !framed) return;
     const el = app.element?.jquery ? app.element[0] : app.element;
     const cls = app.constructor?.name ?? "?";
     const D = window.foundry?.applications?.api?.DialogV2;
@@ -136,7 +139,7 @@ export async function act(client, steps, { stepTimeoutMs = 10000, totalMs = 9000
       switch (s.do) {
         case "click": case "dblclick": case "rightclick": {
           const button = s.do === "rightclick" ? "right" : "left", clickCount = s.do === "dblclick" ? 2 : 1;
-          if (target.locator) { await target.locator.click({ button, clickCount, modifiers: mods, timeout }); rec.point = await pointOf(target, timeout).catch(() => undefined); }
+          if (target.locator) { rec.point = await pointOf(target, timeout).catch(() => undefined); await target.locator.click({ button, clickCount, modifiers: mods, timeout }); }   /* position first: a clicked button often vanishes */
           else {
             rec.point = target.point;
             for (const m of mods) await kb.down(m);

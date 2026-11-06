@@ -62,15 +62,16 @@ export function startStub(port = 30999) {
       board.addEventListener("pointerup",ev=>{if(down&&down.moves>2)window.__stub.drags.push({from:down.from,to:toScene(ev),moves:down.moves,trusted:ev.isTrusted});down=null});
       board.addEventListener("dblclick",()=>{window.__stub.dbl++});
       document.addEventListener("keydown",ev=>{window.__stub.keys.push(ev.key)});
-      document.getElementById("count").addEventListener("click",ev=>{window.__stub.count++;window.__stub.lastCountClick={shift:ev.shiftKey,trusted:ev.isTrusted}});
+      document.getElementById("count").addEventListener("click",ev=>{if(window.__stub.vanish)ev.target.remove();window.__stub.count++;window.__stub.lastCountClick={shift:ev.shiftKey,trusted:ev.isTrusted}});
       /* windows: foundry.applications.instances (v2) and ui.windows (v1), notifications in #notifications */
       window.foundry={applications:{instances:new Map(),api:{DialogV2:class DialogV2{}}}};
+      foundry.applications.instances.set("hotbar",{id:"hotbar",hasFrame:false,title:"",element:document.querySelector("nav"),constructor:{name:"Hotbar"}});
       window.ui={windows:{},controls:{control:{name:"tokens"},tool:{name:"select"}},notifications:{info:t=>note("info",t),warn:t=>note("warning",t),error:t=>note("error",t)}};
       const note=(type,text)=>{const li=document.createElement("li");li.className="notification "+type;li.textContent=text;document.getElementById("notifications").appendChild(li);setTimeout(()=>li.remove(),4000)};
       window.openDialog=()=>{const el=document.createElement("div");el.className="application dialog";el.style.cssText="position:absolute;left:300px;top:100px;width:300px;background:#eee;padding:8px";el.innerHTML='<h1 class="window-title">Confirm</h1><p>Are you sure?</p><input name="note" value="x"><button data-action="yes">Yes</button><button data-action="no">No</button>';document.getElementById("apps").appendChild(el);const d=new foundry.applications.api.DialogV2();d.id="dlg1";d.title="Confirm";d.element=el;foundry.applications.instances.set(d.id,d);el.querySelectorAll("button").forEach(b=>b.addEventListener("click",ev=>{window.__stub.answered=b.dataset.action;foundry.applications.instances.delete(d.id);el.remove()}));ui.notifications.info("Dialog opened");return d};
       document.getElementById("open-dialog").addEventListener("click",()=>openDialog());
       setInterval(async()=>{ try{ const a=await (await fetch("/stub/alive")).json(); if(!a.alive) location.href="/join"; users.forEach(u=>{u.active=a.online.includes(u.name)}); }catch(e){} },500);
-      addEventListener("pagehide",()=>{navigator.sendBeacon("/stub/logout?user=${uid}")});
+      window.game.socket.disconnect=()=>{navigator.sendBeacon("/stub/logout?user=${uid}")};
     </script></body></html>`);
   });
   app.get("/stub/alive", (req, res) => res.json({ alive: world.active, online: [...online].map(id => userNames[id]) }));

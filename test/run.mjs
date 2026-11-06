@@ -127,11 +127,16 @@ try {
   r = await call("ui_act", { target: "gm", steps: [{ do: "click", button: "Nope" , timeoutMs: 800 }, { do: "click", button: "Count" }] });
   check("a failing step stops the batch and is reported", r.ok && r.data.ok === false && r.data.failed === 0 && r.data.steps[1].skipped, r.text.slice(0, 200));
 
+  await script("window.__stub.vanish = true; return 1", "gm");
+  r = await call("ui_act", { target: "gm", steps: [{ do: "click", button: "Count" }] });
+  check("a button that vanishes when clicked doesn't stall the batch", r.ok && r.data.ok && r.data.steps[0].ms < 2000, `${r.data.steps?.[0]?.ms} ms`);
+  await script("window.__stub.vanish = false; const b = document.createElement('button'); b.id = 'count'; b.textContent = 'Count'; b.addEventListener('click', ev => { window.__stub.count++; window.__stub.lastCountClick = { shift: ev.shiftKey, trusted: ev.isTrusted }; }); document.querySelector('nav').prepend(b); window.__stub.count = 2; return 1", "gm");
   /* dialogs: what opened, read it, answer it */
   r = await call("ui_act", { target: "gm", steps: [{ do: "click", button: "Open Dialog" }] });
   check("ui_act reports the window a click opened", r.ok && r.data.opened?.[0]?.title === "Confirm" && r.data.opened[0].dialog === true && r.data.notifications?.[0]?.text === "Dialog opened", r.text.slice(0, 300));
   r = await call("ui_read", { target: "gm" });
   const w = r.data.windows?.[0];
+  check("ui_read lists only framed windows unless all", r.ok && r.data.windows.length === 1 && (await call("ui_read", { target: "gm", all: true })).data.windows.some(x => x.id === "hotbar"), r.data.windows.map(x => x.id).join());
   check("ui_read: dialog with buttons, fields, text, state", r.ok && w?.title === "Confirm" && w.dialog && w.buttons.map(b => b.text).join() === "Yes,No" && w.fields[0]?.name === "note" && /Are you sure/.test(w.text) && r.data.user === "AI" && r.data.scene === "Village sheet" && r.data.tool === "select", r.text.slice(0, 300));
   r = await callRaw("ui_look", { target: "gm", region: "window", title: "confirm", maxWidth: 200 });
   let img = image(r), size = img && jpegSize(img);

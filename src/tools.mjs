@@ -384,10 +384,10 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
 
     tool("ui_read", {
       title: "Read the screen",
-      description: "What is on a hidden page as text: open windows and dialogs with their buttons, fields and text; notifications; selected and targeted tokens; scene, tool, combat, pause state.",
-      inputSchema: { target: TARGET.default("gm").describe(targetDoc), maxChars: z.number().int().min(0).max(8000).default(1500).describe("Text per window"), windows: z.boolean().default(true) },
+      description: "What is on a hidden page as text: open windows and dialogs (framed ones; all: true adds the sidebar, hotbar and HUD) with their buttons, fields and text; notifications; selected and targeted tokens; scene, tool, combat, pause state.",
+      inputSchema: { target: TARGET.default("gm").describe(targetDoc), maxChars: z.number().int().min(0).max(8000).default(1500).describe("Text per window"), windows: z.boolean().default(true), all: z.boolean().default(false).describe("Also list frameless UI parts (sidebar, hotbar, HUD), not only windows") },
       annotations: READ
-    }, async ({ target, maxChars, windows }) => json(await ui.read(await guard({ target }), { maxChars, windows })));
+    }, async ({ target, maxChars, windows, all }) => json(await ui.read(await guard({ target }), { maxChars, windows, all })));
 
     tool("ui_look", {
       title: "Screenshot",

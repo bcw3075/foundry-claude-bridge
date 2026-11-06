@@ -48,10 +48,13 @@ One Node program on the machine that runs Foundry. It keeps a hidden Chromium pa
 - A page reload clears `window.__bridge`: reinstall the helpers after every reload (`reloadPage` does). While the bridge's own page reloads, its state is `joining` so the watchdog stands back.
 - Playwright's `Browser` has no `process()`; each `chromium.launch` is its own process, which is why the sessions use a second launch rather than a second context in the bridge's browser.
 - Scaling a screenshot: CDP `Page.captureScreenshot` takes a `scale` inside its `clip`, so the browser scales it and no image library is needed. Scene coordinates become page pixels through `canvas.clientCoordinatesFromCanvas`.
+- Foundry registers every piece of its UI (sidebar, hotbar, HUD, chat log) as an application, so `ui_read` lists only framed ones (`hasFrame` for v2, `popOut` for v1) unless asked for `all`; unfiltered, one read was 60 KB.
+- Take a button's position before clicking it: many buttons vanish when clicked (the card redraws), and asking for the position afterwards waited out the whole timeout (10 s, during which a monster turn finished).
+- Close a session cleanly: disconnect `game.socket` and leave the page before closing its context, then pause before closing the browser. Closing the context and then killing the browser at once left the account shown as online in Foundry for minutes (seen live with AI on 14.370), which then blocked the next `session start`.
 - Playwright locators auto-wait for visibility, so filter with `{ visible: true }` before `.first()`; otherwise a hidden duplicate of a button makes a click wait until its timeout.
 
 ## Testing
-1. `npm install`, then `npm test`. Every check must pass (107 at 0.2.0, about 90 s). Add a check for every new tool or fix. The run ends by restarting the bridge with `allowUi` off to prove the UI tools are absent then.
+1. `npm install`, then `npm test`. Every check must pass (109 at 0.2.1, about 90 s). Add a check for every new tool or fix. The run ends by restarting the bridge with `allowUi` off to prove the UI tools are absent then.
 2. Then test live through the connector, in the test world: status, every changed tool, a script if scripts are on, a map job if map tools changed, and for the UI tools a comparison with a real browser (a module button, a double-click after a hover, a canvas token drag, a held-key action), since the stub only proves the events arrive trusted. Say which tools were not exercised live.
 
 ## Releasing
