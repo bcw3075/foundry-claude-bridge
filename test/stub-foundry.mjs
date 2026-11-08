@@ -41,14 +41,21 @@ export function startStub(port = 30999) {
       const pages=[{id:"p1",name:"Overview",type:"text",text:{content:"<p>The village of <b>Millbrook</b>.</p><section class=\\"secret\\"><p>Goblins hide here.</p></section>"}}];
       /* Encounter Builder stand-in: the bridge reads its runner setting and whether a turn is busy */
       window.__stubFight=null; window.__stubSettings={};
-      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{fight:{current:c=>window.__stubFight}}};
+      /* its brain interface: waits and plans are recorded in window.__stubBrain; set __stubBrain.event to have a wait return it */
+      window.__stubBrain={generation:7,waits:[],plans:[],event:null};
+      const brainWait=async(cursor,seconds,o={})=>{const b=window.__stubBrain;b.waits.push({cursor,seconds,generation:o.generation??null});
+        if(o.generation==null){b.generation++;return {cursor,hello:{generation:b.generation,prompt:"stub prompt"}}}
+        if(o.generation!==b.generation)return {cursor,superseded:true,reason:"newer chat"};
+        const end=Date.now()+seconds*1000;for(;;){const e=b.event;if(e&&e.seq>cursor)return {cursor:e.seq,event:e};if(Date.now()>=end)return {cursor,idle:true};await new Promise(r=>setTimeout(r,100))}};
+      const brainCall=kind=>async(c,id,x,meta)=>{window.__stubBrain.plans.push({kind,combat:c.id,id,x,meta:meta??null});return kind==="submit"?{state:"ready",steps:[{do:"strike",words:"Bite E1"}]}:kind==="check"?{ok:true,steps:[]}:{state:"requested",gaveUp:true}};
+      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp")}}};
       window.game={ready:true,version:"14.369",paused:false,world:{id:"pf2-test",title:"PF2 Test"},system:{id:"pf2e",version:"8.6.1"},
         user:Object.assign(users.find(u=>u.id==="${uid}"),{targets:new Set()}),users:Object.assign(coll(users),{activeGM:users[1]}),
         time:{worldTime:12345},modules:Object.assign([{id:"lythara-survey-sheet",version:"0.2.2",active:true,api:{createSheet:async a=>{await new Promise(r=>setTimeout(r,300));return {name:a.name||"Sheet",scene:"s9"}},renderSheet:async(s,o)=>({map:{bytes:1000,fingerprint:1}}),syncExploration:async()=>({harvested:1,restored:[["Village sheet",5]]}),exploredArea:()=>66.29,exportSheet:s=>({ok:true,scene:s.id,fingerprint:-356423167}),applySheet:async d=>({ok:true,sheets:[]})}},encounterBuilder],{get(id){return this.find(m=>m.id===id)}}),
         settings:{get:(ns,k)=>window.__stubSettings[k]},
         actors:coll(actors),scenes:Object.assign(coll(scenes),{get active(){return scenes.find(s=>s.active)}}),
         messages:coll(messages),combat:{started:true,round:2,turn:0,combatant:{name:"Test Hero"},turns:[{id:"c1",name:"Test Hero",initiative:18,defeated:false,hidden:false,actor:actors[0]},{id:"c2",name:"Goblin Warrior",initiative:12,defeated:false,hidden:false,actor:actors[1]}]},
-        combats:coll([{id:"c1",started:true}]),
+        combats:coll([{id:"c1",started:true,getFlag:(ns,k)=>ns==="lythara-encounter-builder"&&k==="turns"?{requests:{r1:{state:"requested"}}}:undefined}]),
         journal:coll([{id:"j1",name:"Millbrook",folder:null,pages:coll(pages)}]),
         socket:{connected:true}};
       /* canvas: scene coordinates are twice the page pixels; real input is recorded in window.__stub */

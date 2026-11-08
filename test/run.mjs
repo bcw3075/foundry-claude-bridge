@@ -13,7 +13,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 8790, PUB = `http://127.0.0.1:${PORT}`, PASS = "open sesame 2026";
 const dataDir = path.join(ROOT, "test", ".data"); fs.rmSync(dataDir, { recursive: true, force: true }); fs.mkdirSync(dataDir, { recursive: true });
 const cfgPath = path.join(ROOT, "config.json"), hadCfg = fs.existsSync(cfgPath), savedCfg = hadCfg ? fs.readFileSync(cfgPath) : null;
-fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Claude Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000 }));
+fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Claude Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000, fightWaitChunkS: 2 }));
 
 const results = []; const check = (name, ok, info = "") => { results.push([name, ok, info]); console.log(`${ok ? "PASS" : "FAIL"} ${name}${info ? " — " + info : ""}`); };
 const stub = await startStub(30999);
@@ -86,6 +86,42 @@ try {
   r = await call("map_sheet_apply", { data: { paint: "" } }); check("map_sheet_apply", r.ok && !!r.data.job);
   r = await call("run_script", { code: "return game.world.title + ' ' + (await Promise.resolve(42))" }); check("run_script (allowed in test config)", r.ok && r.data === "PF2 Test 42", r.text);
   r = await call("job_status", { job: "nope" }); check("unknown job fails cleanly", !r.ok);
+
+  /* ---- 0.3.0: monster turns from a chat (Encounter Builder's brain interface, stood in for by the stub) ---- */
+  const brain = async () => (await call("run_script", { code: "return window.__stubBrain" })).data;
+  check("fight tools listed", ["fight_wait", "fight_plan"].every(t => tools.includes(t)), tools.join(","));
+  let t1 = Date.now(); r = await call("fight_wait", {});
+  check("fight_wait with no generation gives the hello at once", r.ok && r.data.hello?.generation === 8 && r.data.cursor === 0 && Date.now() - t1 < 3000, r.text.slice(0, 160));
+  r = await call("fight_wait", { generation: 8, maxSeconds: 0 }); check("fight_wait maxSeconds 0 just looks", r.ok && r.data.idle === true && r.data.waits === 1, r.text.slice(0, 160));
+  await call("run_script", { code: "window.__stubBrain.waits = []; return 1" });
+  t1 = Date.now(); r = await call("fight_wait", { generation: 8, maxSeconds: 5 }); let b = await brain();
+  check("fight_wait chains waits up to maxSeconds, then idle", r.ok && r.data.idle && r.data.waits === 3 && b.waits.map(w => w.seconds).join() === "2,2,1" && b.waits.every(w => w.generation === 8 && w.cursor === 0) && Date.now() - t1 >= 4500 && Date.now() - t1 < 9000, `${r.text.slice(0, 120)} ${JSON.stringify(b.waits)}`);
+  await call("run_script", { code: "setTimeout(() => { window.__stubBrain.event = { seq: 1700000000123, kind: 'turn', combatId: 'c1', requestId: 'r1', packet: { you: { label: 'M1' } } }; }, 2500); return 1" });
+  t1 = Date.now(); r = await call("fight_wait", { generation: 8, cursor: 5, maxSeconds: 20 });
+  check("fight_wait returns an event as it comes, in a later chained wait", r.ok && r.data.event?.requestId === "r1" && r.data.cursor === 1700000000123 && r.data.waits >= 2 && Date.now() - t1 < 6000, r.text.slice(0, 200));
+  r = await call("fight_wait", { generation: 8, cursor: 1700000000123, maxSeconds: 0 }); check("…and the cursor it gave moves past it", r.ok && r.data.idle, r.text.slice(0, 120));
+  r = await call("fight_wait", { generation: 3, maxSeconds: 5 }); check("an older generation is told it's superseded, without waiting", r.ok && r.data.superseded === true && r.data.waits === 1, r.text.slice(0, 120));
+  await call("run_script", { code: "game.modules.get('lythara-encounter-builder').active = false; return 1" });
+  r = await call("fight_wait", { generation: 8 }); check("fight_wait without Encounter Builder says so", !r.ok && /isn't active/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "r1", generation: 8, plan: { steps: [{ do: "none" }] } }); check("fight_plan without Encounter Builder says so", !r.ok && /isn't active/.test(r.text), r.text);
+  await call("run_script", { code: "game.modules.get('lythara-encounter-builder').active = true; window.__stubBrain.plans = []; return 1" });
+  const plan = { requestId: "r1", reason: "Bite the nearest", steps: [{ do: "strike", item: "jaws", target: "E1" }] };
+  r = await call("fight_plan", { requestId: "r1", generation: 8, plan, model: "test-model" }); b = await brain();
+  check("fight_plan hands the plan in as the chat, finding the fight from the request", r.ok && r.data.state === "ready" && r.data.combatId === "c1" && b.plans.length === 1 && b.plans[0].kind === "submit" && b.plans[0].combat === "c1" && b.plans[0].x.steps[0].item === "jaws" && b.plans[0].meta.by === "chat" && b.plans[0].meta.generation === 8 && b.plans[0].meta.model === "test-model", `${r.text.slice(0, 120)} ${JSON.stringify(b.plans)}`);
+  r = await call("fight_plan", { requestId: "r1", combatId: "c1", generation: 8, plan: JSON.stringify(plan) }); b = await brain();
+  check("fight_plan passes a plan sent as JSON text on unchanged", r.ok && typeof b.plans[1].x === "string" && JSON.parse(b.plans[1].x).reason === "Bite the nearest", JSON.stringify(b.plans[1]).slice(0, 160));
+  r = await call("fight_plan", { requestId: "r1", generation: 8, plan, check: true }); b = await brain();
+  check("fight_plan check: true only checks", r.ok && r.data.checkOnly && r.data.ok === true && b.plans.length === 3 && b.plans[2].kind === "check", r.text.slice(0, 120));
+  r = await call("fight_plan", { requestId: "r1", generation: 8, giveUp: "No target it can reach" }); b = await brain();
+  check("fight_plan giveUp reports the failure for the GM", r.ok && r.data.gaveUp && b.plans[3].kind === "giveUp" && b.plans[3].x === "No target it can reach" && b.plans[3].meta.by === "chat", r.text.slice(0, 120));
+  r = await call("fight_plan", { requestId: "r1", generation: 8, plan, giveUp: "x" }); check("fight_plan refuses a plan and giveUp together", !r.ok && /either/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "r1", generation: 8 }); check("fight_plan refuses neither", !r.ok && /either/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "r1", generation: 8, giveUp: "x", check: true }); check("fight_plan refuses check with giveUp", !r.ok && /only with a plan/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "nope", generation: 8, plan }); check("fight_plan with an unknown request says so", !r.ok && /No fight has a turn/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "r1", combatId: "zz", generation: 8, plan }); check("fight_plan with an unknown fight says so", !r.ok && /no fight with that combatId/.test(r.text), r.text);
+  b = await brain(); check("nothing more reached the module from refused calls", b.plans.length === 4, JSON.stringify(b.plans.map(p => p.kind)));
+  const auditLines = fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+  check("fight tools are audited", auditLines.some(a => a.tool === "fight_plan" && a.ok && a.args?.plan?.reason === "Bite the nearest") && auditLines.some(a => a.tool === "fight_wait" && a.ok), String(auditLines.filter(a => /^fight/.test(a.tool)).length));
 
   /* ---- 0.2.0: hidden test sessions and real input ---- */
   const script = (code, target = "bridge", extra = {}) => call("run_script", { code, target, ...extra });
@@ -243,6 +279,7 @@ try {
   await client2.connect(new StreamableHTTPClientTransport(new URL(PUB + "/mcp"), { requestInit: { headers: { authorization: "Bearer " + ref.access_token } } }));
   const tools2 = (await client2.listTools()).tools.map(t => t.name);
   check("ui tools absent when allowUi is off", !tools2.some(t => /^ui_|^session$|^client_tools$/.test(t)) && tools2.includes("run_script"), tools2.join(","));
+  check("fight tools stay when allowUi is off", tools2.includes("fight_wait") && tools2.includes("fight_plan"), tools2.join(","));
   const r2 = await client2.callTool({ name: "run_script", arguments: { code: "return 1", target: "gm" } });
   check("run_script on a session is refused when ui is off", r2.isError && /allowUi/.test(r2.content[0].text), r2.content[0].text);
   await client2.close();

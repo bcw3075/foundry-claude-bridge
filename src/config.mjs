@@ -40,7 +40,10 @@ const DEFAULTS = {
   /* how long an access token lives, in seconds */
   accessTokenTtl: 24 * 3600,
   /* in-page tool calls give up after this many milliseconds */
-  evalTimeoutMs: 60000
+  evalTimeoutMs: 60000,
+  /* fight_wait holds one in-page wait at most this long, in seconds, and chains them up to the caller's maxSeconds: each one tells
+     Encounter Builder the thinker is still listening. Tests set it low; leave it alone otherwise. */
+  fightWaitChunkS: 60
 };
 
 export function loadConfig() {
