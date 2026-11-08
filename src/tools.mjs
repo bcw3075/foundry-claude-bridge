@@ -327,7 +327,7 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
     inputSchema: {
       cursor: z.number().int().min(0).default(0).describe("The cursor from the last answer; 0 the first time"),
       generation: z.number().int().min(1).nullish().describe("From the hello; leave out only on the first call, which makes you the thinker and retires any older chat"),
-      maxSeconds: z.number().int().min(0).max(600).default(90).describe("How long to hold if nothing is waiting; 0 just looks")
+      maxSeconds: z.number().int().min(0).max(200).default(180).describe("How long to hold if nothing is waiting; 0 just looks. At most 200: a client cuts a tool call off at about 230 s")
     }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   }, async ({ cursor, generation, maxSeconds }, extra) => {
     const t0 = Date.now(), end = t0 + maxSeconds * 1000, chunk = Math.max(1, Math.floor(Number(cfg.fightWaitChunkS)) || 60);

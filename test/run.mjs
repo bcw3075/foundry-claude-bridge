@@ -100,6 +100,7 @@ try {
   t1 = Date.now(); r = await call("fight_wait", { generation: 8, cursor: 5, maxSeconds: 20 });
   check("fight_wait returns an event as it comes, in a later chained wait", r.ok && r.data.event?.requestId === "r1" && r.data.cursor === 1700000000123 && r.data.waits >= 2 && Date.now() - t1 < 6000, r.text.slice(0, 200));
   r = await call("fight_wait", { generation: 8, cursor: 1700000000123, maxSeconds: 0 }); check("…and the cursor it gave moves past it", r.ok && r.data.idle, r.text.slice(0, 120));
+  r = await call("fight_wait", { generation: 8, maxSeconds: 201 }); check("fight_wait refuses more than 200 s", !r.ok && /200/.test(r.text), r.text.slice(0, 120));
   r = await call("fight_wait", { generation: 3, maxSeconds: 5 }); check("an older generation is told it's superseded, without waiting", r.ok && r.data.superseded === true && r.data.waits === 1, r.text.slice(0, 120));
   await call("run_script", { code: "game.modules.get('lythara-encounter-builder').active = false; return 1" });
   r = await call("fight_wait", { generation: 8 }); check("fight_wait without Encounter Builder says so", !r.ok && /isn't active/.test(r.text), r.text);
