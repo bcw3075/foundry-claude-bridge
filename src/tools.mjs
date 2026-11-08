@@ -44,7 +44,8 @@ async function fightWaitOnce({ cursor, seconds, generation }) {
 /** Hand a plan to Encounter Builder for a waiting monster turn, check one without writing, or give up on the turn. */
 async function fightPlanOnce({ combatId, requestId, plan, generation, model, check, giveUp }) {
   const ID = "lythara-encounter-builder", m = game.modules.get(ID), f = m?.api?.fight;
-  if (!m?.active || typeof f?.submitPlan !== "function") throw new Error("Encounter Builder isn't active in this world, so there's no monster turn to plan.");
+  if (!m?.active || ["submitPlan", "checkPlan", "reportFailure"].some(k => typeof f?.[k] !== "function")) throw new Error("Encounter Builder isn't active in this world (or is older than 0.3.8), so there's no monster turn to plan.");
+  if (!game.user.isGM) throw new Error("The bridge's account isn't a GM here.");
   const has = c => !!c.getFlag(ID, "turns")?.requests?.[requestId];
   const combat = combatId ? game.combats.get(combatId) : game.combats.find(has);
   if (!combat) throw new Error(combatId ? "There's no fight with that combatId." : "No fight has a turn with that requestId.");
@@ -325,11 +326,11 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
     description: "Encounter Builder: wait until a monster ticked for Angel needs a plan (a new turn, a retry after a refused plan, or a re-plan), and return the event with the monster's packet. First call: leave out generation and get the hello (your generation, the plan and packet schemas, and the instructions for thinking for a monster); pass that generation on every later call, and pass back the cursor each answer gives you, so a dropped call loses nothing. Answers { idle: true } if nothing came within maxSeconds, { superseded: true } if a newer chat took over. Each wait keeps the 'Angel is listening' light on.",
     inputSchema: {
       cursor: z.number().int().min(0).default(0).describe("The cursor from the last answer; 0 the first time"),
-      generation: z.number().int().min(1).optional().describe("From the hello; leave out only on the first call, which makes you the thinker and retires any older chat"),
+      generation: z.number().int().min(1).nullish().describe("From the hello; leave out only on the first call, which makes you the thinker and retires any older chat"),
       maxSeconds: z.number().int().min(0).max(600).default(90).describe("How long to hold if nothing is waiting; 0 just looks")
-    }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   }, async ({ cursor, generation, maxSeconds }, extra) => {
-    const t0 = Date.now(), end = t0 + maxSeconds * 1000, chunk = Math.max(1, cfg.fightWaitChunkS ?? 60);
+    const t0 = Date.now(), end = t0 + maxSeconds * 1000, chunk = Math.max(1, Math.floor(Number(cfg.fightWaitChunkS)) || 60);
     for (let waits = 1; ; waits++) {
       const left = Math.max(0, Math.ceil((end - Date.now()) / 1000)), seconds = generation == null ? 0 : Math.min(chunk, left);
       const r = await foundry.eval(fightWaitOnce, { cursor, seconds, generation: generation ?? null }, { timeout: (seconds + 30) * 1000 });
@@ -342,18 +343,21 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
     title: "Hand in a monster's plan",
     description: "Encounter Builder: hand in the plan for a waiting monster turn (the event's requestId), as the plan's JSON. The module checks it and answers ready (its steps, in words) or refused with a reason and the tries left; the GM's card shows it. check: true only asks whether it would be accepted and changes nothing. giveUp: a short reason instead of a plan puts \"Angel couldn't plan this turn\" on the GM's card. Plans from an older generation are ignored.",
     inputSchema: {
-      requestId: z.string().min(1).max(40).describe("The event's requestId"),
-      combatId: z.string().min(1).max(40).optional().describe("The event's combatId; found from the requestId if left out"),
+      requestId: z.string().regex(/^[A-Za-z0-9]{1,40}$/, "a requestId is letters and digits").describe("The event's requestId"),
+      combatId: z.string().regex(/^[A-Za-z0-9]{1,40}$/, "a combatId is letters and digits").nullish().describe("The event's combatId; found from the requestId if left out"),
       generation: z.number().int().min(1).describe("Your generation, from the hello"),
-      plan: z.union([z.object({}).passthrough(), z.string().max(8000)]).optional().describe("The plan: { requestId, reason, steps: [...], suggestOpus }"),
+      plan: z.union([z.object({}).passthrough(), z.string().max(7500)]).nullish().describe("The plan: { requestId, reason, steps: [...], suggestOpus }"),
       check: z.boolean().default(false).describe("Only check the plan; nothing is written"),
-      giveUp: z.string().min(1).max(200).optional().describe("Instead of a plan: why no plan can be made, for the GM"),
-      model: z.string().max(60).optional().describe("The model thinking, kept with the plan")
-    }, annotations: WRITE
+      giveUp: z.string().min(1).max(200).nullish().describe("Instead of a plan: why no plan can be made, for the GM"),
+      model: z.string().max(60).nullish().describe("The model thinking, kept with the plan")
+    }, annotations: { ...WRITE, destructiveHint: true }
   }, async ({ requestId, combatId, generation, plan, check, giveUp, model }) => {
     if ((plan == null) === (giveUp == null)) throw new Error("Send either a plan or giveUp, not both and not neither.");
     if (check && giveUp != null) throw new Error("check works only with a plan.");
-    return json(await foundry.eval(fightPlanOnce, { combatId: combatId ?? null, requestId, plan: plan ?? null, generation, model: model ?? null, check, giveUp: giveUp ?? null }, { timeout: 30000 }));
+    if (plan != null && JSON.stringify(plan).length > 7500) throw new Error("That plan is far too long to be a plan (over 7,500 characters).");
+    /* with the bridge as the runner, the module checks the plan before answering, which can include opening the fight's map: allow for it */
+    try { return json(await foundry.eval(fightPlanOnce, { combatId: combatId ?? null, requestId, plan: plan ?? null, generation, model: model ?? null, check, giveUp: giveUp ?? null }, { timeout: 120000 })); }
+    catch (e) { if (/didn't answer within/.test(e?.message ?? "")) throw new Error(`${e.message} The plan may still have gone in: don't send it again; wait with fight_wait for the next event, and the GM's card shows where the turn stands.`); throw e; }
   });
 
   /* ---------- scripts: only when the owner allows it in config.json ---------- */

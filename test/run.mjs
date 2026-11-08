@@ -110,6 +110,9 @@ try {
   check("fight_plan hands the plan in as the chat, finding the fight from the request", r.ok && r.data.state === "ready" && r.data.combatId === "c1" && b.plans.length === 1 && b.plans[0].kind === "submit" && b.plans[0].combat === "c1" && b.plans[0].x.steps[0].item === "jaws" && b.plans[0].meta.by === "chat" && b.plans[0].meta.generation === 8 && b.plans[0].meta.model === "test-model", `${r.text.slice(0, 120)} ${JSON.stringify(b.plans)}`);
   r = await call("fight_plan", { requestId: "r1", combatId: "c1", generation: 8, plan: JSON.stringify(plan) }); b = await brain();
   check("fight_plan passes a plan sent as JSON text on unchanged", r.ok && typeof b.plans[1].x === "string" && JSON.parse(b.plans[1].x).reason === "Bite the nearest", JSON.stringify(b.plans[1]).slice(0, 160));
+  r = await call("fight_wait", { generation: 8, cursor: 1700000000123, maxSeconds: 0, unknown: null }); check("fight_wait takes null for leaving a field out", r.ok && r.data.idle, r.text.slice(0, 120));
+  r = await call("fight_plan", { requestId: "r1", combatId: null, generation: 8, plan, giveUp: null, model: null }); b = await brain(); check("fight_plan takes null for leaving a field out", r.ok && r.data.state === "ready" && b.plans.length === 3, r.text.slice(0, 120));
+  await call("run_script", { code: "window.__stubBrain.plans.pop(); return 1" });
   r = await call("fight_plan", { requestId: "r1", generation: 8, plan, check: true }); b = await brain();
   check("fight_plan check: true only checks", r.ok && r.data.checkOnly && r.data.ok === true && b.plans.length === 3 && b.plans[2].kind === "check", r.text.slice(0, 120));
   r = await call("fight_plan", { requestId: "r1", generation: 8, giveUp: "No target it can reach" }); b = await brain();
@@ -119,6 +122,9 @@ try {
   r = await call("fight_plan", { requestId: "r1", generation: 8, giveUp: "x", check: true }); check("fight_plan refuses check with giveUp", !r.ok && /only with a plan/.test(r.text), r.text);
   r = await call("fight_plan", { requestId: "nope", generation: 8, plan }); check("fight_plan with an unknown request says so", !r.ok && /No fight has a turn/.test(r.text), r.text);
   r = await call("fight_plan", { requestId: "r1", combatId: "zz", generation: 8, plan }); check("fight_plan with an unknown fight says so", !r.ok && /no fight with that combatId/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "nope", combatId: "c1", generation: 8, plan }); check("fight_plan for a fight without that request says so", !r.ok && /That fight has no turn/.test(r.text), r.text);
+  r = await call("fight_plan", { requestId: "r1; x", generation: 8, plan }); check("fight_plan refuses a requestId that isn't letters and digits", !r.ok && /letters and digits/.test(r.text), r.text.slice(0, 160));
+  r = await call("fight_plan", { requestId: "r1", generation: 8, plan: { reason: "x".repeat(8000), steps: [] } }); check("fight_plan refuses a plan far too long", !r.ok && /far too long/.test(r.text), r.text.slice(0, 120));
   b = await brain(); check("nothing more reached the module from refused calls", b.plans.length === 4, JSON.stringify(b.plans.map(p => p.kind)));
   const auditLines = fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").trim().split("\n").map(l => JSON.parse(l));
   check("fight tools are audited", auditLines.some(a => a.tool === "fight_plan" && a.ok && a.args?.plan?.reason === "Bite the nearest") && auditLines.some(a => a.tool === "fight_wait" && a.ok), String(auditLines.filter(a => /^fight/.test(a.tool)).length));
