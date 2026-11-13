@@ -8,12 +8,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startStub } from "./stub-foundry.mjs";
 import { hashPassphrase } from "../src/auth.mjs";
+import { costOf, failureWords, hardFailure, planOf } from "../src/worker.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8790, PUB = `http://127.0.0.1:${PORT}`, PASS = "open sesame 2026";
+const PORT = 8790, PUB = `http://127.0.0.1:${PORT}`, PASS = "open sesame 2026", KEY = "sk-ant-test-" + crypto.randomBytes(8).toString("hex");
 const dataDir = path.join(ROOT, "test", ".data"); fs.rmSync(dataDir, { recursive: true, force: true }); fs.mkdirSync(dataDir, { recursive: true });
 const cfgPath = path.join(ROOT, "config.json"), hadCfg = fs.existsSync(cfgPath), savedCfg = hadCfg ? fs.readFileSync(cfgPath) : null;
-fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Claude Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000, fightWaitChunkS: 2 }));
+fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Claude Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000, fightWaitChunkS: 2,
+  anthropicApiKey: KEY, apiUrl: "http://127.0.0.1:30999/stub/api/v1/messages", apiPollS: 1, apiRetryMs: 50, apiMaxCallsPerHour: 5 }));
 
 const results = []; const check = (name, ok, info = "") => { results.push([name, ok, info]); console.log(`${ok ? "PASS" : "FAIL"} ${name}${info ? " — " + info : ""}`); };
 const stub = await startStub(30999);
@@ -271,7 +273,60 @@ try {
   check("watchdog rejoins after a world restart", rejoined, rejoined ? "rejoined" : out.split("\n").slice(-4).join(" | "));
   r = await call("foundry_status"); check("tools work again after the rejoin", r.ok && r.data.connected, r.text.slice(0, 80));
 
+  /* ---- the API worker (0.4.0): Encounter Builder's API route against a stand-in API ---- */
+  const sApi = async () => (await call("run_script", { code: "return JSON.parse(JSON.stringify(window.__stubApi))" })).data;
+  const apiCalls = async () => (await fetch("http://127.0.0.1:30999/stub/api/calls")).json();
+  const apiMode = m => fetch(`http://127.0.0.1:30999/stub/api/mode?m=${m}`, { method: "POST" });
+  const plansNow = async () => (await brain()).plans.filter(p => p.meta?.by === "api");
+  const setApi = code => call("run_script", { code: `const a = window.__stubApi; ${code}; return 1` });
+  const waitFor = async (f, n = 40) => { for (let i = 0; i < n && !(await f()); i++) await new Promise(x => setTimeout(x, 250)); };
+  const ev = (seq, kind, rid, model = "sonnet") => `a.event = { seq: ${seq}, kind: '${kind}', combatId: 'c1', requestId: '${rid}', model: '${model}', monster: 'M', packet: { you: { label: 'M1' } } }`;
+  check("api worker: hard and soft failures told apart", hardFailure(401) && hardFailure(403) && hardFailure(404) && hardFailure(400, "Your credit balance is too low to access the Anthropic API.") && hardFailure(400, "You have reached your specified workspace API usage limits.")
+    && !hardFailure(400, "prompt is too long: limit 200000 tokens") && !hardFailure(429) && !hardFailure(500) && !hardFailure(0, "ECONNRESET"));
+  check("api worker: failures in words", /out of credit/.test(failureWords(400, "Your credit balance is too low")) && /spend limit/.test(failureWords(400, "usage limits reached")) && /refused the key/.test(failureWords(401)) && /apiModels/.test(failureWords(404, "model: x"))
+    && /three tries/.test(failureWords(503)) && /too busy/.test(failureWords(429)) && /couldn't be reached \(ENOTFOUND\)/.test(failureWords(0, "ENOTFOUND")) && /answered 400 \(prompt/.test(failureWords(400, "prompt is too long")));
+  check("api worker: a plan out of an answer, and its cost", planOf('```json\n{"a":1}\n```').a === 1 && planOf("no json") === null && Math.abs(costOf({ input_tokens: 100, cache_creation_input_tokens: 1000, cache_read_input_tokens: 500, output_tokens: 200 }, [4, 5, 0.2, 20]) - 0.0095) < 1e-12);
+  await new Promise(x => setTimeout(x, 2500));
+  check("api worker: nothing while no fight is on the API route", (await sApi()).waits.length === 0 && (await apiCalls()).length === 0, JSON.stringify((await sApi()).waits));
+  await setApi(`a.want = true; ${ev(100, "turn", "r1", "opus")}`);
+  await waitFor(async () => (await plansNow()).length);
+  let ap = await plansNow(), calls = await apiCalls(), sa = await sApi();
+  check("api worker: says hello on the API route and plans the turn", ap.length === 1 && ap[0].id === "r1" && ap[0].kind === "submit" && ap[0].x?.steps?.[0]?.do === "strike" && sa.waits[0]?.generation === null, JSON.stringify(ap).slice(0, 300));
+  check("api worker: the monster's model, the module's prompt cached, the event sent", calls.length === 1 && calls[0].body?.model === "claude-opus-5-5" && calls[0].body?.system?.[0]?.text === "stub api prompt" && calls[0].body?.system?.[0]?.cache_control?.type === "ephemeral"
+    && /"requestId":"r1"/.test(calls[0].body?.messages?.[0]?.content?.[0]?.text ?? "") && calls[0].hasKey && calls[0].version === "2023-06-01", JSON.stringify(calls[0]?.body ?? {}).slice(0, 200));
+  check("api worker: the plan goes in by api with the model, generation and cost, and the cost is kept on the fight", ap[0]?.meta?.model === "claude-opus-5-5" && ap[0]?.meta?.generation === sa.generation && Math.abs((ap[0]?.meta?.usage?.cost ?? 0) - 0.0094) < 1e-9 && ap[0]?.meta?.usage?.in === 1100 && ap[0]?.meta?.usage?.out === 200
+    && sa.spends.length === 1 && sa.spends[0].combat === "c1" && sa.spends[0].model === "claude-opus-5-5" && Math.abs(sa.spends[0].cost - 0.0094) < 1e-9 && sa.spends[0].requestId === "r1", JSON.stringify(sa.spends));
+  await setApi(ev(101, "stall", "r1")); await new Promise(x => setTimeout(x, 2000));
+  check("api worker: a stall is left to the chat", (await apiCalls()).length === 1 && (await plansNow()).length === 1);
+  await apiMode("500"); await setApi(ev(102, "turn", "r2"));
+  await waitFor(async () => (await sApi()).handoffs.length >= 1);
+  sa = await sApi(); calls = await apiCalls();
+  check("api worker: a failing API is tried three times, then the turn is handed on and it keeps listening", calls.length === 4 && calls.slice(1).every(c => c.body?.model === "claude-sonnet-5-5") && sa.handoffs[0]?.id === "r2" && /three tries/.test(sa.handoffs[0]?.reason ?? "") && sa.handoffs[0]?.meta?.by === "api" && !sa.notes.length && sa.spends.length === 1, JSON.stringify(sa.handoffs));
+  await apiMode("ok"); await call("run_script", { code: "window.__stubBrain.submitThrow = true; return 1" }); await setApi(ev(103, "turn", "r3"));
+  await waitFor(async () => (await sApi()).handoffs.length >= 2);
+  sa = await sApi(); await call("run_script", { code: "window.__stubBrain.submitThrow = false; return 1" });
+  check("api worker: a plan that can't be handed in has its turn handed on (its cost still kept)", (await apiCalls()).length === 5 && sa.handoffs[1]?.id === "r3" && /couldn't be handed in \(That turn is running/.test(sa.handoffs[1]?.reason ?? "") && sa.spends.length === 2, JSON.stringify(sa.handoffs[1]));
+  await setApi(ev(104, "turn", "r4"));
+  await waitFor(async () => (await sApi()).handoffs.length >= 3);
+  sa = await sApi();
+  check("api worker: past its requests an hour (retries counted) it stops, says so on the card and hands the turn on", (await apiCalls()).length === 5 && sa.notes.at(-1)?.state === "capped" && /5 calls in the last hour/.test(sa.handoffs[2]?.reason ?? ""), JSON.stringify(sa.notes));
+  const hellos = sa.waits.filter(w => w.generation === null).length;
+  await apiMode("401"); await setApi(`a.wake = { n: 1, launch: 'L1' }; ${ev(105, "retry", "r5")}`);
+  await waitFor(async () => (await sApi()).handoffs.length >= 4);
+  sa = await sApi(); calls = await apiCalls();
+  check("api worker: Wake Angel starts it again with a fresh hello (which clears the card's note); a refused key stops it with the reason and hands the turn on", calls.length === 6 && sa.waits.filter(w => w.generation === null).length === hellos + 1 && sa.notes.at(-1)?.state === "stopped" && /refused the key/.test(sa.notes.at(-1)?.reason ?? "") && /refused the key/.test(sa.handoffs[3]?.reason ?? ""), JSON.stringify(sa.notes.at(-1)));
+  await apiMode("text"); await setApi(ev(106, "turn", "r6")); await new Promise(x => setTimeout(x, 2500));
+  check("api worker: once stopped it calls nothing until woken", (await apiCalls()).length === 6 && (await plansNow()).length === 1);
+  await setApi("a.wake = { n: 2, launch: 'L1' }");
+  await waitFor(async () => (await plansNow()).length >= 2);
+  ap = await plansNow();
+  check("api worker: woken again, an answer with no JSON goes in as it came for the module to refuse", ap.length === 2 && ap[1].id === "r6" && ap[1].x === "I would bite the wizard.", JSON.stringify(ap[1] ?? null).slice(0, 200));
+  await setApi("a.want = false; a.event = null"); await apiMode("ok");
+  r = await call("foundry_status"); check("foundry_status shows the API worker", r.ok && r.data.api?.key === true && typeof r.data.api?.callsLastHour === "number" && !JSON.stringify(r.data).includes(KEY), JSON.stringify(r.data.api));
+  const hl = await (await fetch(PUB + "/health")).json(); check("health says whether the API is on, nothing more", ["listening", "ready", "stopped"].includes(hl.api) && !JSON.stringify(hl).includes(KEY), JSON.stringify(hl));
+
   const audit = fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+  check("the API key is in no log and no audit record", !fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").includes(KEY) && !fs.readFileSync(path.join(dataDir, "bridge.log"), "utf8").includes(KEY) && !out.includes(KEY) && audit.some(a => a.tool === "api-worker"));
   check("audit log has every call", audit.length >= 24 && audit.every(a => a.tool && a.time), `${audit.length} entries`);
   check("audit records never hold an image", !audit.some(a => JSON.stringify(a).length > 5000), `longest ${Math.max(...audit.map(a => JSON.stringify(a).length))} chars`);
   await client.close();
@@ -289,6 +344,11 @@ try {
   check("fight tools stay when allowUi is off", tools2.includes("fight_wait") && tools2.includes("fight_plan"), tools2.join(","));
   const r2 = await client2.callTool({ name: "run_script", arguments: { code: "return 1", target: "gm" } });
   check("run_script on a session is refused when ui is off", r2.isError && /allowUi/.test(r2.content[0].text), r2.content[0].text);
+  /* no key: the worker only answers Wake Angel with "no key" on the card */
+  await new Promise(x => setTimeout(x, 6000));
+  await client2.callTool({ name: "run_script", arguments: { code: "window.__stubApi.want = true; window.__stubApi.wake = { n: 1, launch: 'L1' }; return 1" } });
+  let nk = null; for (let i = 0; i < 40; i++) { nk = JSON.parse((await client2.callTool({ name: "run_script", arguments: { code: "return JSON.stringify(window.__stubApi)" } })).content[0].text); nk = typeof nk === "string" ? JSON.parse(nk) : nk; if (nk.notes?.length) break; await new Promise(x => setTimeout(x, 300)); }
+  check("with no API key, Wake Angel gets \"no key\" on the card and nothing listens", nk?.notes?.[0]?.state === "no-key" && !nk.waits.length && /api off/.test(out2), JSON.stringify(nk?.notes));
   await client2.close();
 } catch (e) { check("harness", false, String(e.stack ?? e)); }
 finally {

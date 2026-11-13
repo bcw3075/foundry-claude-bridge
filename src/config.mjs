@@ -43,7 +43,25 @@ const DEFAULTS = {
   evalTimeoutMs: 60000,
   /* fight_wait holds one in-page wait at most this long, in seconds, and chains them up to the caller's maxSeconds: each one tells
      Encounter Builder the thinker is still listening. Tests set it low; leave it alone otherwise. */
-  fightWaitChunkS: 60
+  fightWaitChunkS: 60,
+  /* ---- the API worker (0.4.0): Encounter Builder's API route. It is on only when the owner adds "anthropicApiKey" here by hand (a key from her
+     Console workspace; setup never asks for it, and the bridge never logs, audits or sends it anywhere but the API). ---- */
+  /* the Messages API; tests point it at a stand-in */
+  apiUrl: "https://api.anthropic.com/v1/messages",
+  /* the model each of Encounter Builder's picks means; change these when newer models come, no code change needed */
+  apiModels: { sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5" },
+  /* dollars per million tokens [fresh input, 5-minute cache write, cache read, output], for the cost shown in the module's History (checked 2026-11-12) */
+  apiPrices: { "claude-sonnet-5-5": [2, 2.5, 0.2, 10], "claude-opus-5-5": [4, 5, 0.2, 20] },
+  /* a guard against a fault that loops: past this many calls in an hour the worker stops until Wake Angel (about $5 at worst at 120) */
+  apiMaxCallsPerHour: 120,
+  /* how often the worker looks whether a fight is on the API route, in seconds (a read that writes nothing) */
+  apiPollS: 5,
+  /* the most one answer may use, in tokens */
+  apiMaxTokens: 4000,
+  /* how long one request may take before it is tried again, in seconds (three tries in all) */
+  apiTimeoutS: 60,
+  /* how long it waits before trying a busy or failing API again (then twice as long), in milliseconds */
+  apiRetryMs: 5000
 };
 
 export function loadConfig() {

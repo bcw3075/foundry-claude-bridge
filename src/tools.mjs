@@ -56,7 +56,7 @@ async function fightPlanOnce({ combatId, requestId, plan, generation, model, che
   return { combatId: combat.id, ...(await f.submitPlan(combat, requestId, plan, meta)) };
 }
 
-export function registerTools(server, foundry, cfg, audit, sessions = null) {
+export function registerTools(server, foundry, cfg, audit, sessions = null, worker = null) {
   const tool = (name, def, run) => server.registerTool(name, def, async (args, extra) => {
     const t0 = Date.now();
     try {
@@ -76,8 +76,8 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
     description: "Whether the bridge is connected to Foundry, which world and scene are active, who is online, and the module list.",
     inputSchema: {}, annotations: READ
   }, async () => {
-    const s = foundry.status();
-    if (s.state !== "ready") return json({ connected: false, ...s });
+    const s = foundry.status(), api = worker ? worker.status() : null;   /* the API worker (0.4.0): whether it has a key, listens, stopped and why, calls this hour */
+    if (s.state !== "ready") return json({ connected: false, ...s, ...(api ? { api } : {}) });
     const info = await foundry.eval(() => ({
       world: game.world.title, worldId: game.world.id, core: game.version, system: `${game.system.id} ${game.system.version}`,
       user: game.user.name, role: game.user.role, paused: game.paused,
@@ -87,7 +87,7 @@ export function registerTools(server, foundry, cfg, audit, sessions = null) {
       worldTime: game.time.worldTime,
       modules: [...game.modules].filter(m => m.active).map(m => `${m.id} ${m.version}`)
     }));
-    return json({ connected: true, since: s.since, ...info, ui: cfg.allowUi ? { enabled: true, worlds: cfg.uiWorlds, ...(sessions?.status() ?? {}) } : { enabled: false } });
+    return json({ connected: true, since: s.since, ...info, ui: cfg.allowUi ? { enabled: true, worlds: cfg.uiWorlds, ...(sessions?.status() ?? {}) } : { enabled: false }, ...(api ? { api } : {}) });
   });
 
   /* ---------- chat ---------- */

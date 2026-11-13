@@ -1,6 +1,6 @@
 {
   "name": "foundry-claude-bridge",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A small MCP server that lets Claude act inside a Foundry VTT world through a headless GM client on the same machine.",
   "type": "module",
   "private": true,

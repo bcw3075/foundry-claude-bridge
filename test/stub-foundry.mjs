@@ -43,12 +43,22 @@ export function startStub(port = 30999) {
       window.__stubFight=null; window.__stubSettings={};
       /* its brain interface: waits and plans are recorded in window.__stubBrain; set __stubBrain.event to have a wait return it */
       window.__stubBrain={generation:7,waits:[],plans:[],event:null};
-      const brainWait=async(cursor,seconds,o={})=>{const b=window.__stubBrain;b.waits.push({cursor,seconds,generation:o.generation??null});
+      /* the API route (0.31.0): the bridge's worker reads route.wanted() and waits with route "api"; window.__stubApi holds what it sees and records
+         its notes and hand-ons; set __stubApi.want, __stubApi.event and __stubApi.wake to drive it */
+      window.__stubApi={want:false,wake:{n:0,launch:"L1"},launch:"L1",notes:[],handoffs:[],spends:[],alives:0,generation:3,event:null,waits:[]};
+      const apiWait=async(cursor,seconds,o)=>{const a=window.__stubApi;a.waits.push({cursor,seconds,generation:o.generation??null});
+        if(o.generation==null){a.generation++;return {cursor,hello:{generation:a.generation,prompt:"stub api prompt",promptVersion:32,route:"api"}}}
+        if(o.generation!==a.generation)return {cursor,superseded:true,reason:"newer"};
+        const end=Date.now()+seconds*1000;for(;;){const e=a.event;if(e&&e.seq>cursor)return {cursor:e.seq,event:e};if(Date.now()>=end)return {cursor,idle:true};await new Promise(r=>setTimeout(r,100))}};
+      const brainWait=async(cursor,seconds,o={})=>{if(o.route==="api")return apiWait(cursor,seconds,o);const b=window.__stubBrain;b.waits.push({cursor,seconds,generation:o.generation??null});
         if(o.generation==null){b.generation++;return {cursor,hello:{generation:b.generation,prompt:"stub prompt"}}}
         if(o.generation!==b.generation)return {cursor,superseded:true,reason:"newer chat"};
         const end=Date.now()+seconds*1000;for(;;){const e=b.event;if(e&&e.seq>cursor)return {cursor:e.seq,event:e};if(Date.now()>=end)return {cursor,idle:true};await new Promise(r=>setTimeout(r,100))}};
-      const brainCall=kind=>async(c,id,x,meta)=>{window.__stubBrain.plans.push({kind,combat:c.id,id,x,meta:meta??null});return kind==="submit"?{state:"ready",steps:[{do:"strike",words:"Bite E1"}]}:kind==="check"?{ok:true,steps:[]}:{state:"requested",gaveUp:true}};
-      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp")}}};
+      const brainCall=kind=>async(c,id,x,meta)=>{if(kind==="submit"&&window.__stubBrain.submitThrow)throw new Error("That turn is running.");window.__stubBrain.plans.push({kind,combat:c.id,id,x,meta:meta??null});return kind==="submit"?{state:"ready",steps:[{do:"strike",words:"Bite E1"}]}:kind==="check"?{ok:true,steps:[]}:{state:"requested",gaveUp:true}};
+      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp"),
+        handOff:async(c,id,reason,meta)=>{window.__stubApi.handoffs.push({combat:c.id,id,reason,meta});return {state:"requested",handedOff:true}},
+        route:{wanted:()=>({ok:true,want:window.__stubApi.want,wake:window.__stubApi.wake,launch:window.__stubApi.launch}),note:async n=>{window.__stubApi.notes.push(n);return n},
+          alive:async g=>{window.__stubApi.alives++;return {ok:true}},spend:async(c,u)=>{window.__stubApi.spends.push({combat:c.id,...u});return true}}}}};
       window.game={ready:true,version:"14.369",paused:false,world:{id:"pf2-test",title:"PF2 Test"},system:{id:"pf2e",version:"8.6.1"},
         user:Object.assign(users.find(u=>u.id==="${uid}"),{targets:new Set()}),users:Object.assign(coll(users),{activeGM:users[1]}),
         time:{worldTime:12345},modules:Object.assign([{id:"lythara-survey-sheet",version:"0.2.2",active:true,api:{createSheet:async a=>{await new Promise(r=>setTimeout(r,300));return {name:a.name||"Sheet",scene:"s9"}},renderSheet:async(s,o)=>({map:{bytes:1000,fingerprint:1}}),syncExploration:async()=>({harvested:1,restored:[["Village sheet",5]]}),exploredArea:()=>66.29,exportSheet:s=>({ok:true,scene:s.id,fingerprint:-356423167}),applySheet:async d=>({ok:true,sheets:[]})}},encounterBuilder],{get(id){return this.find(m=>m.id===id)}}),
@@ -80,6 +90,19 @@ export function startStub(port = 30999) {
       setInterval(async()=>{ try{ const a=await (await fetch("/stub/alive")).json(); if(!a.alive) location.href="/join"; users.forEach(u=>{u.active=a.online.includes(u.name)}); }catch(e){} },500);
       window.game.socket.disconnect=()=>{navigator.sendBeacon("/stub/logout?user=${uid}")};
     </script></body></html>`);
+  });
+  /* a stand-in for the Claude Messages API (0.4.0): it records each call (whether a key came, never the key itself) and answers by its mode */
+  const api = { mode: "ok", calls: [] };
+  app.post("/stub/api/mode", (req, res) => { api.mode = String(req.query.m ?? "ok"); res.json({ ok: true, mode: api.mode }); });
+  app.get("/stub/api/calls", (req, res) => res.json(api.calls));
+  app.post("/stub/api/v1/messages", (req, res) => {
+    let body = null; try { body = JSON.parse(req.body); } catch {}
+    api.calls.push({ at: Date.now(), hasKey: !!req.headers["x-api-key"], version: req.headers["anthropic-version"] ?? null, mode: api.mode, body });
+    if (api.mode === "401") return res.status(401).json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } });
+    if (api.mode === "500") return res.status(500).json({ type: "error", error: { type: "api_error", message: "Internal server error" } });
+    if (api.mode === "text") return res.json({ content: [{ type: "text", text: "I would bite the wizard." }], usage: { input_tokens: 10, output_tokens: 5 }, stop_reason: "end_turn" });
+    res.json({ content: [{ type: "text", text: '```json\n{ "requestId": "r1", "reason": "Bite the nearest.", "steps": [{ "do": "strike", "item": "jaws", "target": "E1" }] }\n```' }],
+      usage: { input_tokens: 100, cache_creation_input_tokens: 1000, cache_read_input_tokens: 0, output_tokens: 200 }, stop_reason: "end_turn" });
   });
   app.get("/stub/alive", (req, res) => res.json({ alive: world.active, online: [...online].map(id => userNames[id]) }));
   app.post("/stub/restart", (req, res) => { world.active = false; online.clear(); setTimeout(() => { world.active = true; }, 5000); res.json({ ok: true }); });
