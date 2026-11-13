@@ -72,6 +72,7 @@ A one-off script the owner runs herself on the bridge's PC (`node tools/api-test
 - Foundry registers every piece of its UI (sidebar, hotbar, HUD, chat log) as an application, so `ui_read` lists only framed ones (`hasFrame` for v2, `popOut` for v1) unless asked for `all`; unfiltered, one read was 60 KB.
 - Take a button's position before clicking it: many buttons vanish when clicked (the card redraws), and asking for the position afterwards waited out the whole timeout (10 s, during which a monster turn finished).
 - Close a session cleanly: disconnect `game.socket` and leave the page before closing its context, then pause before closing the browser. That is hygiene, not the fix for a stuck login: on 14.370 the **AI** account stays shown as online after its session closes (the same happened earlier to a closed pane tab), while Test Player drops at once through exactly the same close. The leftover doesn't follow a `pullToScene`, so no live page is behind it; a world relaunch clears it. Until then `session start gm` is refused, which is the right answer for a login the bridge can't see.
+- An error thrown inside the page comes back from `page.evaluate` as "page.evaluate: Error: <message>" followed by the browser's stack: keep only the message before it reaches anyone (the API worker's hand-on reasons, found by its tests in 0.4.0).
 - Playwright locators auto-wait for visibility, so filter with `{ visible: true }` before `.first()`; otherwise a hidden duplicate of a button makes a click wait until its timeout.
 
 ## Testing
