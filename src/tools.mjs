@@ -48,7 +48,9 @@ async function fightPlanOnce({ combatId, requestId, plan, generation, model, che
   if (!game.user.isGM) throw new Error("The bridge's account isn't a GM here.");
   /* the fight-start look (Encounter Builder 0.33.0) has its own request id, "look": it is the fight's, not a turn's */
   const has = c => requestId === "look" ? !!c.getFlag(ID, "turns")?.look : !!c.getFlag(ID, "turns")?.requests?.[requestId];
-  const combat = combatId ? game.combats.get(combatId) : game.combats.find(has);
+  /* with no combatId, the look of a started fight that still waits for one comes first (an older fight's look is done) */
+  const found = () => requestId === "look" ? game.combats.find(c => c.started && c.getFlag(ID, "turns")?.look?.state === "asked") ?? game.combats.find(has) : game.combats.find(has);
+  const combat = combatId ? game.combats.get(combatId) : found();
   if (!combat) throw new Error(combatId ? "There's no fight with that combatId." : "No fight has a turn with that requestId.");
   if (!has(combat)) throw new Error("That fight has no turn with that requestId.");
   const meta = { by: "chat", generation, ...(model ? { model } : {}) };

@@ -121,7 +121,7 @@ export class ApiWorker {
         if (this.generation == null) {
           const h = await this.foundry.eval(apiWaitIn, { cursor: 0, seconds: 0, generation: null });
           if (!h?.hello?.prompt) throw new Error("the module gave no hello");
-          this.generation = h.hello.generation; this.system = h.hello.prompt; this.cursor = 0; this.joined = this.foundry.since;
+          this.generation = h.hello.generation; this.system = h.hello.prompt; this.cursor = 0; this.joined = this.foundry.since; this.seen = new Set();   /* a new generation answers what is still live afresh: the module offers the fight-start look again to a new generation under its old number (0.4.1) */
           this.log("api", `listening for Encounter Builder (generation ${this.generation}, prompt version ${h.hello.promptVersion ?? "?"})`);
         }
         const r = await this.foundry.eval(apiWaitIn, { cursor: this.cursor, seconds: chunk, generation: this.generation }, { timeout: (chunk + 30) * 1000 });
