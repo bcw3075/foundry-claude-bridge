@@ -51,7 +51,7 @@ app.get("/health", (req, res) => res.json({ ok: true, foundry: foundry.state, si
 const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
 app.all("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
   /* stateless: a fresh MCP server per request, so no session table and nothing to leak between calls */
-  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.4.0" }, { instructions:
+  const server = new McpServer({ name: "foundry-claude-bridge", version: "0.4.1" }, { instructions:
     "Tools that act inside the owner's Foundry VTT world as the bridge's GM user. Reads are safe; writes change the live game. Long map jobs return a job id for job_status. fight_wait and fight_plan let a chat think for Encounter Builder's monsters: wait for a turn, hand in a plan, wait again. "
     + (cfg.allowUi ? "The session, ui_* and client_tools tools act on hidden test sessions (gm, player) with real input; the runner's page is left alone unless forced." : "") });
   registerTools(server, foundry, cfg, audit, sessions, worker);

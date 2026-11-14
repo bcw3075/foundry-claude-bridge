@@ -54,7 +54,7 @@ export function startStub(port = 30999) {
         if(o.generation==null){b.generation++;return {cursor,hello:{generation:b.generation,prompt:"stub prompt"}}}
         if(o.generation!==b.generation)return {cursor,superseded:true,reason:"newer chat"};
         const end=Date.now()+seconds*1000;for(;;){const e=b.event;if(e&&e.seq>cursor)return {cursor:e.seq,event:e};if(Date.now()>=end)return {cursor,idle:true};await new Promise(r=>setTimeout(r,100))}};
-      const brainCall=kind=>async(c,id,x,meta)=>{if(kind==="submit"&&window.__stubBrain.submitThrow)throw new Error("That turn is running.");window.__stubBrain.plans.push({kind,combat:c.id,id,x,meta:meta??null});return kind==="submit"?{state:"ready",steps:[{do:"strike",words:"Bite E1"}]}:kind==="check"?{ok:true,steps:[]}:{state:"requested",gaveUp:true}};
+      const brainCall=kind=>async(c,id,x,meta)=>{if(kind==="submit"&&window.__stubBrain.submitThrow)throw new Error("That turn is running.");window.__stubBrain.plans.push({kind,combat:c.id,id,x,meta:meta??null});return kind==="submit"?(id==="look"?{state:"looked",suggestions:1}:{state:"ready",steps:[{do:"strike",words:"Bite E1"}]}):kind==="check"?{ok:true,steps:[]}:{state:"requested",gaveUp:true}};
       const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp"),
         handOff:async(c,id,reason,meta)=>{window.__stubApi.handoffs.push({combat:c.id,id,reason,meta});return {state:"requested",handedOff:true}},
         route:{wanted:()=>({ok:true,want:window.__stubApi.want,wake:window.__stubApi.wake,launch:window.__stubApi.launch}),note:async n=>{window.__stubApi.notes.push(n);return n},
@@ -65,7 +65,7 @@ export function startStub(port = 30999) {
         settings:{get:(ns,k)=>window.__stubSettings[k]},
         actors:coll(actors),scenes:Object.assign(coll(scenes),{get active(){return scenes.find(s=>s.active)}}),
         messages:coll(messages),combat:{started:true,round:2,turn:0,combatant:{name:"Test Hero"},turns:[{id:"c1",name:"Test Hero",initiative:18,defeated:false,hidden:false,actor:actors[0]},{id:"c2",name:"Goblin Warrior",initiative:12,defeated:false,hidden:false,actor:actors[1]}]},
-        combats:coll([{id:"c1",started:true,getFlag:(ns,k)=>ns==="lythara-encounter-builder"&&k==="turns"?{requests:{r1:{state:"requested"}}}:undefined}]),
+        combats:coll([{id:"c1",started:true,getFlag:(ns,k)=>ns==="lythara-encounter-builder"&&k==="turns"?{requests:{r1:{state:"requested"}},look:{state:"asked",seq:9}}:undefined}]),
         journal:coll([{id:"j1",name:"Millbrook",folder:null,pages:coll(pages)}]),
         socket:{connected:true}};
       /* canvas: scene coordinates are twice the page pixels; real input is recorded in window.__stub */

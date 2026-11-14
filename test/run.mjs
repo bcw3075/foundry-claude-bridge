@@ -116,6 +116,9 @@ try {
   r = await call("fight_wait", { generation: 8, cursor: 1700000000123, maxSeconds: 0, unknown: null }); check("fight_wait takes null for leaving a field out", r.ok && r.data.idle, r.text.slice(0, 120));
   r = await call("fight_plan", { requestId: "r1", combatId: null, generation: 8, plan, giveUp: null, model: null }); b = await brain(); check("fight_plan takes null for leaving a field out", r.ok && r.data.state === "ready" && b.plans.length === 3, r.text.slice(0, 120));
   await call("run_script", { code: "window.__stubBrain.plans.pop(); return 1" });
+  r = await call("fight_plan", { requestId: "look", generation: 8, plan: { look: [], fits: [] } }); b = await brain();
+  check("fight_plan finds the fight-start look by its own request id (0.4.1)", r.ok && r.data.state === "looked" && r.data.combatId === "c1" && b.plans.at(-1)?.id === "look", r.text.slice(0, 160));
+  await call("run_script", { code: "window.__stubBrain.plans.pop(); return 1" });   /* the counts below are of turn plans */
   r = await call("fight_plan", { requestId: "r1", generation: 8, plan, check: true }); b = await brain();
   check("fight_plan check: true only checks", r.ok && r.data.checkOnly && r.data.ok === true && b.plans.length === 3 && b.plans[2].kind === "check", r.text.slice(0, 120));
   r = await call("fight_plan", { requestId: "r1", generation: 8, giveUp: "No target it can reach" }); b = await brain();
@@ -321,6 +324,11 @@ try {
   await waitFor(async () => (await plansNow()).length >= 2);
   ap = await plansNow();
   check("api worker: woken again, an answer with no JSON goes in as it came for the module to refuse", ap.length === 2 && ap[1].id === "r6" && ap[1].x === "I would bite the wizard.", JSON.stringify(ap[1] ?? null).slice(0, 200));
+  /* 0.4.1: Encounter Builder 0.33.0's fight-start look is answered too, and its "looked" counts as landed (no hand-on) */
+  { const handed = (await sApi()).handoffs.length; await apiMode("ok"); await setApi(ev(107, "look", "look", "opus"));
+    await waitFor(async () => (await plansNow()).some(p => p.id === "look"));
+    const lp = (await plansNow()).find(p => p.id === "look"), lc = (await apiCalls()).at(-1);
+    check("api worker: the fight-start look goes to the API with its model and lands without a hand-on", !!lp && lp.kind === "submit" && lp.meta?.model === "claude-opus-5-5" && /"kind":"look"/.test(lc?.body?.messages?.[0]?.content?.[0]?.text ?? "") && /for a "look" event the look/.test(lc?.body?.messages?.[0]?.content?.[0]?.text ?? "") && (await sApi()).handoffs.length === handed, JSON.stringify(lp ?? null).slice(0, 200)); }
   await setApi("a.want = false; a.event = null"); await apiMode("ok");
   r = await call("foundry_status"); check("foundry_status shows the API worker", r.ok && r.data.api?.key === true && typeof r.data.api?.callsLastHour === "number" && !JSON.stringify(r.data).includes(KEY), JSON.stringify(r.data.api));
   const hl = await (await fetch(PUB + "/health")).json(); check("health says whether the API is on, nothing more", ["listening", "ready", "stopped"].includes(hl.api) && !JSON.stringify(hl).includes(KEY), JSON.stringify(hl));

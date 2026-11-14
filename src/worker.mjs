@@ -11,9 +11,10 @@
 import { look } from "./ui.mjs";
 
 const ID = "lythara-encounter-builder";
-/* the event kinds the API answers; a "stall" asks the thinker to look into something, which only a chat with tools can do */
-const KINDS = ["turn", "retry", "replan", "choice"];
-const ASK = 'A monster needs you. Below is the event, with its packet. Answer with the JSON alone: for a "choice" event the choice, otherwise the plan.';
+/* the event kinds the API answers; a "stall" asks the thinker to look into something, which only a chat with tools can do. "look" (0.4.1):
+   Encounter Builder 0.33.0's fight-start look, one a fight, answered with the look's JSON */
+const KINDS = ["turn", "retry", "replan", "choice", "look"];
+const ASK = 'A monster needs you. Below is the event, with its packet. Answer with the JSON alone: for a "choice" event the choice, for a "look" event the look, otherwise the plan.';
 const GROUND = "#lythara-encounter-builder-ground";
 
 /* ---------- in-page functions (self-contained: they are serialised into the bridge's page) ---------- */
@@ -170,7 +171,7 @@ export class ApiWorker {
     catch (e) { const m = String(e?.message ?? e).replace(/^page\.evaluate:\s*/, "").replace(/^Error:\s*/, "").split("\n")[0]; this.log("api", `couldn't hand the plan in: ${m}`); res = { error: m }; }   /* the page's own words, not the browser's stack */
     /* the plan landed, or was refused with a try left (a retry event follows), or the module ignored it on purpose (another thinker has the turn,
        or the route changed): nothing more. Anything else leaves the turn waiting with nobody on it, so it is handed on (review 2). */
-    const landed = ["ready", "running", "done", "manual", "chosen", "submitted", "held", "stopped", "saves"].includes(res?.state) || (res?.state === "requested" && Number.isFinite(res?.triesLeft)) || res?.ignored;
+    const landed = ["ready", "running", "done", "manual", "chosen", "looked", "submitted", "held", "stopped", "saves"].includes(res?.state) || (res?.state === "requested" && Number.isFinite(res?.triesLeft)) || res?.ignored;
     if (!landed) await this.handOff(ev, `the API's answer couldn't be handed in (${String(res?.error ?? res?.reason ?? "no answer").slice(0, 120)})`);
     this.audit({ tool: "api-worker", args: { requestId: ev.requestId, kind: ev.kind, model }, ok: !res?.error, ms: Date.now() - t0, seconds: out.seconds, cost, state: res?.state ?? null, ...(res?.error ? { error: res.error } : {}) });
     this.log("api", `${ev.monster ?? "a monster"} (${ev.kind}, ${model}): ${res?.state ?? "?"}${res?.reason ? ` (${String(res.reason).slice(0, 120)})` : ""}, ${out.seconds.toFixed(1)} s${cost != null ? `, $${cost.toFixed(4)}` : ""}`);

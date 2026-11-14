@@ -46,7 +46,8 @@ async function fightPlanOnce({ combatId, requestId, plan, generation, model, che
   const ID = "lythara-encounter-builder", m = game.modules.get(ID), f = m?.api?.fight;
   if (!m?.active || ["submitPlan", "checkPlan", "reportFailure"].some(k => typeof f?.[k] !== "function")) throw new Error("Encounter Builder isn't active in this world (or is older than 0.3.8), so there's no monster turn to plan.");
   if (!game.user.isGM) throw new Error("The bridge's account isn't a GM here.");
-  const has = c => !!c.getFlag(ID, "turns")?.requests?.[requestId];
+  /* the fight-start look (Encounter Builder 0.33.0) has its own request id, "look": it is the fight's, not a turn's */
+  const has = c => requestId === "look" ? !!c.getFlag(ID, "turns")?.look : !!c.getFlag(ID, "turns")?.requests?.[requestId];
   const combat = combatId ? game.combats.get(combatId) : game.combats.find(has);
   if (!combat) throw new Error(combatId ? "There's no fight with that combatId." : "No fight has a turn with that requestId.");
   if (!has(combat)) throw new Error("That fight has no turn with that requestId.");
@@ -323,7 +324,7 @@ export function registerTools(server, foundry, cfg, audit, sessions = null, work
   /* ---------- monster turns: Encounter Builder's brain interface, so a chat can think for the monsters ---------- */
   tool("fight_wait", {
     title: "Wait for a monster turn",
-    description: "Encounter Builder: wait until a monster ticked for Angel needs a plan (a new turn, a retry after a refused plan, or a re-plan), and return the event with the monster's packet. First call: leave out generation and get the hello (your generation, the plan and packet schemas, and the instructions for thinking for a monster); pass that generation on every later call, and pass back the cursor each answer gives you, so a dropped call loses nothing. Answers { idle: true } if nothing came within maxSeconds, { superseded: true } if a newer chat took over. Each wait keeps the 'Angel is listening' light on.",
+    description: "Encounter Builder: wait until a monster ticked for Angel needs a plan (a new turn, a retry after a refused plan, or a re-plan), a choice, or the fight-start look, and return the event with its packet. First call: leave out generation and get the hello (your generation, the plan and packet schemas, and the instructions for thinking for a monster); pass that generation on every later call, and pass back the cursor each answer gives you, so a dropped call loses nothing. Answers { idle: true } if nothing came within maxSeconds, { superseded: true } if a newer chat took over. Each wait keeps the 'Angel is listening' light on.",
     inputSchema: {
       cursor: z.number().int().min(0).default(0).describe("The cursor from the last answer; 0 the first time"),
       generation: z.number().int().min(1).nullish().describe("From the hello; leave out only on the first call, which makes you the thinker and retires any older chat"),
