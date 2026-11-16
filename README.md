@@ -9,7 +9,7 @@ Nothing in it deletes documents, changes settings or installs modules. Running a
 - Windows PC running Foundry VTT v13 or v14 (the one Foundry already runs on).
 - Node.js 20 or newer: https://nodejs.org (LTS installer, defaults are fine).
 - A public HTTPS address for the bridge, e.g. a Cloudflare Tunnel route `bridge.yourdomain.com → http://localhost:8787`. Claude's servers must be able to reach it.
-- A GM user in Foundry for the bridge (e.g. **Claude Bridge**, role Gamemaster). Make it in Foundry's User Management. It should not be a user anyone else logs in with, because Foundry 14 allows one login per user.
+- A GM user in Foundry for the bridge (e.g. **Angel Bridge**, role Gamemaster). Make it in Foundry's User Management. It should not be a user anyone else logs in with, because Foundry 14 allows one login per user.
 
 ## Install (once)
 
@@ -37,7 +37,7 @@ Task Scheduler → Create Basic Task → "Foundry Bridge" → trigger **When I l
 
 ## Files
 
-- `config.json` — your settings (made by `npm run setup`). `allowScripts: true` enables the `run_script` tool. `allowUi: true` enables the test sessions and the `session`, `ui_act`, `ui_read`, `ui_look`, `ui_wait` and `client_tools` tools; `uiWorlds` (default `["pf2-test"]`) names the only worlds they work in, and `uiAccounts` (default `{"gm": "AI", "player": "Test Player"}`) the two accounts they sign in as. Those accounts must exist in the world, have no password, and not be the bridge's own user.
+- `config.json` — your settings (made by `npm run setup`). `allowScripts: true` enables the `run_script` tool. `allowUi: true` enables the test sessions and the `session`, `ui_act`, `ui_read`, `ui_look`, `ui_wait` and `client_tools` tools; `uiWorlds` (default `["pf2-test"]`) names the only worlds they work in, and `uiAccounts` (default `{"gm": "Angel", "player": "Test Player"}`) the two accounts they sign in as. Those accounts must exist in the world, have no password, and not be the bridge's own user.
 - `data/audit.log` — one line per tool call: time, tool, arguments, result.
 - `data/bridge.log` — connection events. `data/tokens.json`, `data/clients.json` — Claude's connections.
 

@@ -14,7 +14,7 @@ const DEFAULTS = {
   /* Foundry as seen from this machine (not through the tunnel) */
   foundryUrl: "http://localhost:30000",
   /* the Foundry user the hidden client joins as; a GM account made for the bridge */
-  foundryUser: "Claude Bridge",
+  foundryUser: "Angel Bridge",
   /* that user's Foundry password, if it has one; leave empty for none */
   foundryPassword: "",
   /* scrypt hash of the passphrase that approves a new Claude connection (set by `npm run setup`) */
@@ -28,7 +28,7 @@ const DEFAULTS = {
   uiWorlds: ["pf2-test"],
   /* the Foundry accounts the two test sessions join as. Neither may be the bridge's own account, and the tools refuse
      to start a session for an account that is already logged in elsewhere. No passwords: these accounts have none. */
-  uiAccounts: { gm: "AI", player: "Test Player" },
+  uiAccounts: { gm: "Angel", player: "Test Player" },
   /* run Chromium without a window */
   headless: true,
   /* which Chromium to run: "chromium" (full browser, new headless mode, can use the GPU) or "" (Playwright's headless shell, software drawing) */

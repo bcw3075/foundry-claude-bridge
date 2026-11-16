@@ -10,10 +10,10 @@ export function startStub(port = 30999) {
   app.use(express.text({ type: "*/*" }));
   let world = { active: true };
   const online = new Set();
-  const userNames = { u1: "Gamemaster", u2: "Claude Bridge", u3: "Test Player", u4: "AI" };
+  const userNames = { u1: "Gamemaster", u2: "Angel Bridge", u3: "Test Player", u4: "Angel" };
   app.get("/join", (req, res) => {
     if (!world.active) return res.send("<html><body><h1>Critical Failure!</h1><p>There is currently no active game session.</p></body></html>");
-    res.send(`<html><body><form method="post" action="/join"><select name="userId"><option value="u1">Gamemaster</option><option value="u2">Claude Bridge</option><option value="u3">Test Player</option><option value="u4">AI</option></select><input name="password"><button name="join" type="submit">Join Game Session</button></form></body></html>`);
+    res.send(`<html><body><form method="post" action="/join"><select name="userId"><option value="u1">Gamemaster</option><option value="u2">Angel Bridge</option><option value="u3">Test Player</option><option value="u4">Angel</option></select><input name="password"><button name="join" type="submit">Join Game Session</button></form></body></html>`);
   });
   app.post("/join", (req, res) => { online.add(req.body.userId); res.setHeader("Set-Cookie", `session=${req.body.userId}; Path=/`); res.redirect("/game"); });
   app.post("/stub/logout", (req, res) => { online.delete(req.query.user); res.json({ ok: true }); });
@@ -27,7 +27,7 @@ export function startStub(port = 30999) {
       <div id="apps"></div>
       <script>
       console.error("stub error line");
-      const users=[{id:"u1",name:"Gamemaster",role:4,isGM:true,active:true},{id:"u2",name:"Claude Bridge",role:4,isGM:true,active:true},{id:"u3",name:"Test Player",role:1,isGM:false,active:false},{id:"u4",name:"AI",role:4,isGM:true,active:false}];
+      const users=[{id:"u1",name:"Gamemaster",role:4,isGM:true,active:true},{id:"u2",name:"Angel Bridge",role:4,isGM:true,active:true},{id:"u3",name:"Test Player",role:1,isGM:false,active:false},{id:"u4",name:"Angel",role:4,isGM:true,active:false}];
       const coll=arr=>({contents:arr,get:id=>arr.find(x=>x.id===id),getName:n=>arr.find(x=>x.name===n),find:f=>arr.find(f),filter:f=>arr.filter(f),map:f=>arr.map(f),get size(){return arr.length},[Symbol.iterator]:()=>arr[Symbol.iterator]()});
       const hp=(v,m)=>({value:v,max:m,temp:0});
       const mkActor=(id,name,type,level,v,m,items=[])=>({id,name,type,folder:null,system:{details:{level:{value:level},xp:{value:0}},attributes:{hp:hp(v,m),ac:{value:16},speed:{value:25}},saves:{fortitude:{value:5},reflex:{value:7},will:{value:4}},perception:{value:6},resources:{heroPoints:{value:1}},actions:[{label:"Dagger",totalModifier:7}]},items:coll(items.map((n,i)=>({id:"i"+i,name:n,type:n==="Frightened"?"condition":"weapon",value:n==="Frightened"?2:null}))),itemTypes:{condition:items.filter(n=>n==="Frightened").map(n=>({name:n,value:2}))}});

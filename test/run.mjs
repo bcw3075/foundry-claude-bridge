@@ -14,7 +14,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 8790, PUB = `http://127.0.0.1:${PORT}`, PASS = "open sesame 2026", KEY = "sk-ant-test-" + crypto.randomBytes(8).toString("hex");
 const dataDir = path.join(ROOT, "test", ".data"); fs.rmSync(dataDir, { recursive: true, force: true }); fs.mkdirSync(dataDir, { recursive: true });
 const cfgPath = path.join(ROOT, "config.json"), hadCfg = fs.existsSync(cfgPath), savedCfg = hadCfg ? fs.readFileSync(cfgPath) : null;
-fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Claude Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000, fightWaitChunkS: 2,
+fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Angel Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000, fightWaitChunkS: 2,
   anthropicApiKey: KEY, apiUrl: "http://127.0.0.1:30999/stub/api/v1/messages", apiPollS: 1, apiRetryMs: 50, apiMaxCallsPerHour: 5 }));
 
 const results = []; const check = (name, ok, info = "") => { results.push([name, ok, info]); console.log(`${ok ? "PASS" : "FAIL"} ${name}${info ? " — " + info : ""}`); };
@@ -25,7 +25,7 @@ let out = ""; bridge.stdout.on("data", d => { out += d; }); bridge.stderr.on("da
 const until = async (f, ms = 60000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (f()) return true; await new Promise(r => setTimeout(r, 300)); } return false; };
 
 try {
-  check("bridge joins Foundry", await until(() => /joined "PF2 Test" as Claude Bridge/.test(out)), out.split("\n").slice(-2).join(" | "));
+  check("bridge joins Foundry", await until(() => /joined "PF2 Test" as Angel Bridge/.test(out)), out.split("\n").slice(-2).join(" | "));
 
   /* ---- OAuth the way Claude does it ---- */
   const r401 = await fetch(PUB + "/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
@@ -143,15 +143,15 @@ try {
 
   r = await call("session", { action: "status" }); check("session status (nothing started)", r.ok && r.data.browser === false && r.data.sessions.every(x => x.state === "stopped"), r.text.slice(0, 160));
   r = await call("ui_read", { target: "gm" }); check("ui tool on a session that isn't started fails cleanly", !r.ok && /isn't started/.test(r.text), r.text);
-  /* AI logs in elsewhere (a browser tab): the session must refuse */
+  /* Angel logs in elsewhere (a browser tab): the session must refuse */
   await fetch("http://127.0.0.1:30999/join", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "userId=u4", redirect: "manual" });
   await new Promise(x => setTimeout(x, 1200));
   r = await call("session", { action: "start", account: "gm" }); check("session refuses an account that is online elsewhere", !r.ok && /already logged in/.test(r.text), r.text);
   await fetch("http://127.0.0.1:30999/stub/logout?user=u4", { method: "POST" });
   await new Promise(x => setTimeout(x, 1200));
-  r = await call("session", { action: "start", account: "gm" }); check("session start gm (AI) in a second browser", r.ok && r.data.started && r.data.user === "AI" && r.data.state === "ready", r.text.slice(0, 160));
+  r = await call("session", { action: "start", account: "gm" }); check("session start gm (Angel) in a second browser", r.ok && r.data.started && r.data.user === "Angel" && r.data.state === "ready", r.text.slice(0, 160));
   r = await call("session", { action: "start", account: "gm" }); check("session start twice is harmless", r.ok && r.data.started === false, r.text.slice(0, 120));
-  r = await script("return { user: game.user.name, bridge: typeof __bridge.text }", "gm"); check("run_script on the gm session", r.ok && r.data.user === "AI" && r.data.bridge === "function", r.text);
+  r = await script("return { user: game.user.name, bridge: typeof __bridge.text }", "gm"); check("run_script on the gm session", r.ok && r.data.user === "Angel" && r.data.bridge === "function", r.text);
   r = await call("foundry_status"); check("foundry_status shows the session browser", r.ok && r.data.ui?.enabled && r.data.ui.browser === true && r.data.ui.sessions.find(x => x.key === "gm")?.state === "ready", JSON.stringify(r.data.ui).slice(0, 200));
 
   /* real input: buttons, modifiers, fields, canvas by scene coordinates, drag, keys */
@@ -185,7 +185,7 @@ try {
   r = await call("ui_read", { target: "gm" });
   const w = r.data.windows?.[0];
   check("ui_read lists only framed windows unless all", r.ok && r.data.windows.length === 1 && (await call("ui_read", { target: "gm", all: true })).data.windows.some(x => x.id === "hotbar"), r.data.windows.map(x => x.id).join());
-  check("ui_read: dialog with buttons, fields, text, state", r.ok && w?.title === "Confirm" && w.dialog && w.buttons.map(b => b.text).join() === "Yes,No" && w.fields[0]?.name === "note" && /Are you sure/.test(w.text) && r.data.user === "AI" && r.data.scene === "Village sheet" && r.data.tool === "select", r.text.slice(0, 300));
+  check("ui_read: dialog with buttons, fields, text, state", r.ok && w?.title === "Confirm" && w.dialog && w.buttons.map(b => b.text).join() === "Yes,No" && w.fields[0]?.name === "note" && /Are you sure/.test(w.text) && r.data.user === "Angel" && r.data.scene === "Village sheet" && r.data.tool === "select", r.text.slice(0, 300));
   r = await callRaw("ui_look", { target: "gm", region: "window", title: "confirm", maxWidth: 200 });
   let img = image(r), size = img && jpegSize(img);
   check("ui_look: a window as a JPEG scaled to maxWidth", r.ok && img?.[0] === 0xff && img[1] === 0xd8 && size?.width === 200 && r.data.width === 200, `${r.text.slice(0, 120)} jpeg ${JSON.stringify(size)}`);
@@ -232,10 +232,10 @@ try {
   r = await call("ui_act", { target: "bridge", force: true, steps: [{ do: "click", button: "Count" }] }); check("go: true counts as busy", !r.ok && /go/.test(r.text), r.text.slice(0, 120));
   await script("window.__stubFight = null; return 1");
   r = await call("ui_read", { target: "gm" }); check("reads on the runner's page need no force", (await call("ui_read", { target: "bridge" })).ok && r.ok);
-  await script("window.__stubSettings = { runner: 'AI' }; return 1");
-  r = await call("ui_act", { target: "gm", steps: [{ do: "click", button: "Count" }] }); check("the runner setting moves the guard to that session", !r.ok && /"AI" is the runner's page/.test(r.text), r.text.slice(0, 120));
+  await script("window.__stubSettings = { runner: 'Angel' }; return 1");
+  r = await call("ui_act", { target: "gm", steps: [{ do: "click", button: "Count" }] }); check("the runner setting moves the guard to that session", !r.ok && /"Angel" is the runner's page/.test(r.text), r.text.slice(0, 120));
   r = await call("ui_act", { target: "bridge", steps: [{ do: "click", button: "Count" }] }); check("…and frees the bridge's page", r.ok && r.data.ok, r.text.slice(0, 120));
-  r = await call("ui_read", { target: "runner" }); check("target runner follows the setting", r.ok && r.data.user === "AI", r.text.slice(0, 80));
+  r = await call("ui_read", { target: "runner" }); check("target runner follows the setting", r.ok && r.data.user === "Angel", r.text.slice(0, 80));
   r = await call("session", { action: "stop", account: "gm" }); check("stopping the runner's session needs force", !r.ok && /runner's page/.test(r.text), r.text.slice(0, 120));
   await script("window.__stubFight = { state: 'running' }; return 1");
   r = await call("session", { action: "stop", account: "gm", force: true }); check("…and is refused while a turn is busy", !r.ok && /turn is busy/.test(r.text), r.text.slice(0, 120));
@@ -244,14 +244,14 @@ try {
   await new Promise(x => setTimeout(x, 1500));   /* the world needs a moment to see the login drop */
   r = await call("session", { action: "start", account: "gm" }); check("runner session started again", r.ok && r.data.state === "ready", r.text.slice(0, 100));
   await script("window.__stubSettings = {}; return 1");
-  r = await call("ui_read", { target: "runner" }); check("target runner is the bridge by default", r.ok && r.data.user === "Claude Bridge", r.text.slice(0, 80));
+  r = await call("ui_read", { target: "runner" }); check("target runner is the bridge by default", r.ok && r.data.user === "Angel Bridge", r.text.slice(0, 80));
 
   /* client tools */
   r = await call("client_tools", { target: "gm", action: "console", errorsOnly: true }); check("client_tools console", r.ok && r.data.messages.some(m => m.text === "stub error line"), r.text.slice(0, 160));
   r = await call("client_tools", { target: "gm", action: "reload", clearCache: true }); check("client_tools reload (cache cleared)", r.ok && r.data.ready === true, r.text);
-  r = await script("return { user: game.user.name, bridge: typeof __bridge.startJob, count: window.__stub.count }", "gm"); check("the session is back after the reload with helpers reinstalled", r.ok && r.data.user === "AI" && r.data.bridge === "function" && r.data.count === 0, r.text);
+  r = await script("return { user: game.user.name, bridge: typeof __bridge.startJob, count: window.__stub.count }", "gm"); check("the session is back after the reload with helpers reinstalled", r.ok && r.data.user === "Angel" && r.data.bridge === "function" && r.data.count === 0, r.text);
   r = await call("client_tools", { target: "bridge", action: "reload", force: true }); check("forced reload of the bridge's page", r.ok && r.data.ready === true, r.text);
-  r = await call("foundry_status"); check("bridge connected after its reload", r.ok && r.data.connected && r.data.user === "Claude Bridge", r.text.slice(0, 80));
+  r = await call("foundry_status"); check("bridge connected after its reload", r.ok && r.data.connected && r.data.user === "Angel Bridge", r.text.slice(0, 80));
   r = await script("return typeof __bridge.text"); check("helpers reinstalled on the bridge's page", r.data === "function", r.text);
 
   /* player session, background scripts, stopping */
@@ -268,11 +268,11 @@ try {
   r = await call("session", { action: "stop", account: "gm" }); check("session stop gm", r.ok && r.data.stopped, r.text);
   r = await call("session", { action: "status" }); check("session browser closed when the last session ends", r.ok && r.data.browser === false, r.text.slice(0, 120));
   await new Promise(x => setTimeout(x, 1200));
-  r = await script("return game.users.getName('AI').active"); check("AI is offline again after the session closed", r.ok && r.data === false, r.text);
+  r = await script("return game.users.getName('Angel').active"); check("Angel is offline again after the session closed", r.ok && r.data === false, r.text);
 
   /* ---- Foundry restart: the watchdog rejoins ---- */
   await fetch("http://127.0.0.1:30999/stub/restart", { method: "POST" });
-  const rejoined = await until(() => (out.match(/joined "PF2 Test" as Claude Bridge/g) ?? []).length >= 2, 90000);
+  const rejoined = await until(() => (out.match(/joined "PF2 Test" as Angel Bridge/g) ?? []).length >= 2, 90000);
   check("watchdog rejoins after a world restart", rejoined, rejoined ? "rejoined" : out.split("\n").slice(-4).join(" | "));
   r = await call("foundry_status"); check("tools work again after the rejoin", r.ok && r.data.connected, r.text.slice(0, 80));
 
@@ -341,10 +341,10 @@ try {
 
   /* ---- allowUi off (the default): none of the UI tools exist ---- */
   bridge.kill("SIGTERM"); await new Promise(x => setTimeout(x, 800));
-  fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Claude Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000 }));
+  fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Angel Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000 }));
   bridge2 = spawn(process.execPath, ["src/server.mjs"], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
   let out2 = ""; bridge2.stdout.on("data", d => { out2 += d; }); bridge2.stderr.on("data", d => { out2 += d; });
-  check("bridge restarts with ui off", await until(() => /joined "PF2 Test" as Claude Bridge/.test(out2)) && /ui off/.test(out2), out2.split("\n").slice(-2).join(" | "));
+  check("bridge restarts with ui off", await until(() => /joined "PF2 Test" as Angel Bridge/.test(out2)) && /ui off/.test(out2), out2.split("\n").slice(-2).join(" | "));
   const client2 = new Client({ name: "test", version: "1" });
   await client2.connect(new StreamableHTTPClientTransport(new URL(PUB + "/mcp"), { requestInit: { headers: { authorization: "Bearer " + ref.access_token } } }));
   const tools2 = (await client2.listTools()).tools.map(t => t.name);
