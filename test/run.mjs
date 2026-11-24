@@ -342,7 +342,7 @@ try {
     const rm = await room(), rc = (await apiCalls()).slice(before), body = rc[0]?.body;
     check("api worker: a Preview's room ask goes to the API with its own prompt, the ask and the map picture, and the pick goes back", rm.answers.length === 1 && rm.answers[0].seq === 501 && rm.answers[0].a?.room === 2 && rm.answers[0].meta?.by === "api" && rm.answers[0].meta?.model === "claude-sonnet-5-5" && rm.answers[0].meta?.cost > 0 && rm.shows === 1 && rc.length === 1 && body?.system?.[0]?.text === "stub room prompt" && /"rooms":\[\{"room":1\}/.test(body?.messages?.[0]?.content?.[0]?.text ?? "") && body?.messages?.[0]?.content?.[1]?.type === "image", JSON.stringify(rm.answers).slice(0, 300));
     await new Promise(x => setTimeout(x, 2500));
-    check("api worker: a room ask is answered once", (await room()).answers.length === 1 && (await apiCalls()).length === before + 1);
+    check("api worker: a room ask is answered once, and the worker tells the module which it has taken", (await room()).answers.length === 1 && (await apiCalls()).length === before + 1 && (await room()).skips?.includes("s1|501"));
     await apiMode("500"); await call("run_script", { code: "window.__stubRoom.ask = { kind: 'room', sceneId: 's1', seq: 502, model: 'sonnet', system: 'p', ask: {}, picture: 'body; x' }; return 1" });
     await waitFor(async () => (await room()).answers.length > 1, 80);
     const rf = (await room()).answers[1];

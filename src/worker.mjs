@@ -36,7 +36,7 @@ async function apiSubmitIn({ combatId, requestId, plan, meta, handOff }) {
   if (handOff != null) return f.handOff(combat, requestId, handOff, meta);
   return f.submitPlan(combat, requestId, plan, meta);
 }
-function roomPendingIn() { const r = game.modules.get("lythara-encounter-builder")?.api?.room; return typeof r?.pending === "function" ? r.pending() : null; }
+function roomPendingIn({ skip }) { const r = game.modules.get("lythara-encounter-builder")?.api?.room; return typeof r?.pending === "function" ? r.pending(skip) : null; }
 async function roomShowIn({ sceneId }) { const r = game.modules.get("lythara-encounter-builder")?.api?.room; return typeof r?.show === "function" ? r.show(sceneId) : false; }
 async function roomAnswerIn({ sceneId, seq, answer, meta }) { const r = game.modules.get("lythara-encounter-builder")?.api?.room; if (typeof r?.answer !== "function") throw new Error("Encounter Builder can't take a room pick."); return r.answer(sceneId, seq, answer, meta); }
 async function apiNoteIn({ note }) {
@@ -190,7 +190,7 @@ export class ApiWorker {
   /** A Preview's room ask (0.4.3, Encounter Builder 0.42.0): looked at on every poll, answered once, beside any fight. Not while stopped. */
   async roomTick() {
     if (this.roomBusy || !this.key || this.stopped) return;
-    const ev = await this.foundry.eval(roomPendingIn); if (!ev?.sceneId || ev.seq == null) return;
+    const ev = await this.foundry.eval(roomPendingIn, { skip: [...this.roomSeen] }); if (!ev?.sceneId || ev.seq == null) return;
     const k = `${ev.sceneId}|${ev.seq}`; if (this.roomSeen.has(k)) return;
     this.roomSeen.add(k); if (this.roomSeen.size > 200) this.roomSeen = new Set([...this.roomSeen].slice(-100));
     this.roomBusy = true; try { await this.handleRoom(ev); } finally { this.roomBusy = false; }
