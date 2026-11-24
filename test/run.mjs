@@ -334,6 +334,20 @@ try {
     await waitFor(async () => (await plansNow()).some(p => p.id === "r8"));
     const fp = (await plansNow()).find(p => p.id === "r8"), fc = (await apiCalls()).at(-1);
     check("api worker: a Fable pick goes to claude-fable-5-2 and its cost is counted", fc?.body?.model === "claude-fable-5-2" && fp?.meta?.model === "claude-fable-5-2" && (fp?.meta?.usage?.cost ?? 0) > 0.0094, JSON.stringify(fp?.meta ?? null).slice(0, 200)); }
+  /* 0.4.3: Encounter Builder 0.42.0's room pick, answered beside the fights (no fight on the API route needed) */
+  { await setApi("a.want = false; a.event = null"); await apiMode("room"); const before = (await apiCalls()).length;
+    await call("run_script", { code: "window.__stubRoom.ask = { kind: 'room', sceneId: 's1', scene: 'Map', seq: 501, model: 'sonnet', system: 'stub room prompt', ask: { rooms: [{ room: 1 }, { room: 2 }] }, picture: '#lythara-encounter-builder-rooms' }; return 1" });
+    const room = async () => (await call("run_script", { code: "return JSON.parse(JSON.stringify(window.__stubRoom))" })).data;
+    await waitFor(async () => (await room()).answers.length > 0);
+    const rm = await room(), rc = (await apiCalls()).slice(before), body = rc[0]?.body;
+    check("api worker: a Preview's room ask goes to the API with its own prompt, the ask and the map picture, and the pick goes back", rm.answers.length === 1 && rm.answers[0].seq === 501 && rm.answers[0].a?.room === 2 && rm.answers[0].meta?.by === "api" && rm.answers[0].meta?.model === "claude-sonnet-5-5" && rm.answers[0].meta?.cost > 0 && rm.shows === 1 && rc.length === 1 && body?.system?.[0]?.text === "stub room prompt" && /"rooms":\[\{"room":1\}/.test(body?.messages?.[0]?.content?.[0]?.text ?? "") && body?.messages?.[0]?.content?.[1]?.type === "image", JSON.stringify(rm.answers).slice(0, 300));
+    await new Promise(x => setTimeout(x, 2500));
+    check("api worker: a room ask is answered once", (await room()).answers.length === 1 && (await apiCalls()).length === before + 1);
+    await apiMode("500"); await call("run_script", { code: "window.__stubRoom.ask = { kind: 'room', sceneId: 's1', seq: 502, model: 'sonnet', system: 'p', ask: {}, picture: 'body; x' }; return 1" });
+    await waitFor(async () => (await room()).answers.length > 1, 80);
+    const rf = (await room()).answers[1];
+    check("api worker: a room ask the API can't answer tells the Preview why; a picture selector that isn't an id is refused", rf?.seq === 502 && /three tries/.test(rf?.meta?.failed ?? "") && (await room()).shows === 1, JSON.stringify(rf ?? null).slice(0, 200));
+    await call("run_script", { code: "window.__stubRoom.ask = null; return 1" }); }
   await setApi("a.want = false; a.event = null"); await apiMode("ok");
   r = await call("foundry_status"); check("foundry_status shows the API worker", r.ok && r.data.api?.key === true && typeof r.data.api?.callsLastHour === "number" && !JSON.stringify(r.data).includes(KEY), JSON.stringify(r.data.api));
   const hl = await (await fetch(PUB + "/health")).json(); check("health says whether the API is on, nothing more", ["listening", "ready", "stopped"].includes(hl.api) && !JSON.stringify(hl).includes(KEY), JSON.stringify(hl));

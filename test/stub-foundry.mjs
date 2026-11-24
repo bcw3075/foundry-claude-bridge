@@ -55,7 +55,12 @@ export function startStub(port = 30999) {
         if(o.generation!==b.generation)return {cursor,superseded:true,reason:"newer chat"};
         const end=Date.now()+seconds*1000;for(;;){const e=b.event;if(e&&e.seq>cursor)return {cursor:e.seq,event:e};if(Date.now()>=end)return {cursor,idle:true};await new Promise(r=>setTimeout(r,100))}};
       const brainCall=kind=>async(c,id,x,meta)=>{if(kind==="submit"&&window.__stubBrain.submitThrow)throw new Error("That turn is running.");window.__stubBrain.plans.push({kind,combat:c.id,id,x,meta:meta??null});return kind==="submit"?(id==="look"?{state:"looked",suggestions:1}:{state:"ready",steps:[{do:"strike",words:"Bite E1"}]}):kind==="check"?{ok:true,steps:[]}:{state:"requested",gaveUp:true}};
-      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp"),
+      /* Encounter Builder 0.42.0's room pick (bridge 0.4.3): set __stubRoom.ask to a pending event; show draws the picture, answer records the pick */
+      window.__stubRoom={ask:null,answers:[],shows:0};
+      const room={pending:()=>{const r=window.__stubRoom;return r.ask&&!r.answers.some(x=>x.seq===r.ask.seq)?r.ask:null},
+        show:async id=>{window.__stubRoom.shows++;document.getElementById("lythara-encounter-builder-rooms")?.remove();const d=document.createElement("div");d.id="lythara-encounter-builder-rooms";d.style.cssText="position:fixed;left:0;top:0;width:300px;height:200px;background:#fff;z-index:9";document.body.append(d);return true},
+        answer:async(sid,seq,a,meta)=>{window.__stubRoom.answers.push({sid,seq,a,meta});document.getElementById("lythara-encounter-builder-rooms")?.remove();return meta?.failed?{state:"refused",error:meta.failed}:{state:"picked",room:a?.room}}};
+      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{room,fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp"),
         handOff:async(c,id,reason,meta)=>{window.__stubApi.handoffs.push({combat:c.id,id,reason,meta});return {state:"requested",handedOff:true}},
         route:{wanted:()=>({ok:true,want:window.__stubApi.want,wake:window.__stubApi.wake,launch:window.__stubApi.launch}),note:async n=>{window.__stubApi.notes.push(n);return n},
           alive:async g=>{window.__stubApi.alives++;return {ok:true}},spend:async(c,u)=>{window.__stubApi.spends.push({combat:c.id,...u});return true}}}}};
@@ -100,6 +105,7 @@ export function startStub(port = 30999) {
     api.calls.push({ at: Date.now(), hasKey: !!req.headers["x-api-key"], version: req.headers["anthropic-version"] ?? null, mode: api.mode, body });
     if (api.mode === "401") return res.status(401).json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } });
     if (api.mode === "500") return res.status(500).json({ type: "error", error: { type: "api_error", message: "Internal server error" } });
+    if (api.mode === "room") return res.json({ content: [{ type: "text", text: '{"room": 2, "why": "They sleep in the back room, out of sight."}' }], usage: { input_tokens: 1500, output_tokens: 30 }, stop_reason: "end_turn" });
     if (api.mode === "text") return res.json({ content: [{ type: "text", text: "I would bite the wizard." }], usage: { input_tokens: 10, output_tokens: 5 }, stop_reason: "end_turn" });
     res.json({ content: [{ type: "text", text: '```json\n{ "requestId": "r1", "reason": "Bite the nearest.", "steps": [{ "do": "strike", "item": "jaws", "target": "E1" }] }\n```' }],
       usage: { input_tokens: 100, cache_creation_input_tokens: 1000, cache_read_input_tokens: 0, output_tokens: 200 }, stop_reason: "end_turn" });

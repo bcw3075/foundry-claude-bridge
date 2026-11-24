@@ -16,6 +16,8 @@ const ID = "lythara-encounter-builder";
 const KINDS = ["turn", "retry", "replan", "choice", "look"];
 const ASK = 'A monster needs you. Below is the event, with its packet. Answer with the JSON alone: for a "choice" event the choice, for a "look" event the look, otherwise the plan.';
 const GROUND = "#lythara-encounter-builder-ground";
+/* Encounter Builder 0.42.0's room pick (0.4.3): a Preview on a map with rooms asks which room the creatures start in; answered with {"room", "why"} */
+const ROOM_ASK = 'A game master is previewing an encounter. Below is the ask: the brief and the rooms. The picture shows the map with each room numbered. Answer with the JSON alone.';
 
 /* ---------- in-page functions (self-contained: they are serialised into the bridge's page) ---------- */
 function apiWantedIn() {
@@ -34,6 +36,9 @@ async function apiSubmitIn({ combatId, requestId, plan, meta, handOff }) {
   if (handOff != null) return f.handOff(combat, requestId, handOff, meta);
   return f.submitPlan(combat, requestId, plan, meta);
 }
+function roomPendingIn() { const r = game.modules.get("lythara-encounter-builder")?.api?.room; return typeof r?.pending === "function" ? r.pending() : null; }
+async function roomShowIn({ sceneId }) { const r = game.modules.get("lythara-encounter-builder")?.api?.room; return typeof r?.show === "function" ? r.show(sceneId) : false; }
+async function roomAnswerIn({ sceneId, seq, answer, meta }) { const r = game.modules.get("lythara-encounter-builder")?.api?.room; if (typeof r?.answer !== "function") throw new Error("Encounter Builder can't take a room pick."); return r.answer(sceneId, seq, answer, meta); }
 async function apiNoteIn({ note }) {
   const f = game.modules.get("lythara-encounter-builder")?.api?.fight;
   if (typeof f?.route?.note !== "function") return null;
@@ -78,7 +83,7 @@ export class ApiWorker {
     this.cfg = cfg; this.foundry = foundry; this.log = log; this.audit = audit;
     this.key = typeof cfg.anthropicApiKey === "string" && cfg.anthropicApiKey.trim() ? cfg.anthropicApiKey.trim() : null;
     this.timer = null; this.running = false; this.stopped = null; this.lastWake = null; this.generation = null; this.system = null; this.cursor = 0;
-    this.calls = []; this.seen = new Set(); this.spent = 0; this.joined = null; this.wakeJoin = null;
+    this.calls = []; this.seen = new Set(); this.spent = 0; this.joined = null; this.wakeJoin = null; this.roomSeen = new Set(); this.roomBusy = false;
     this.retryMs = Math.max(0, Number(cfg.apiRetryMs ?? 5000));
   }
   get on() { return !!this.key; }
@@ -92,6 +97,7 @@ export class ApiWorker {
     if (this.running || this.foundry.state !== "ready") return;
     const w = await this.foundry.eval(apiWantedIn);
     if (!w?.module || !w.ok) return;
+    this.roomTick().catch(e => this.log("api", `room pick failed: ${e.message}`));
     const n = Number(w.wake?.n) || 0, fresh = (w.wake?.launch ?? "") === (w.launch ?? "");
     /* the first look only notes where the presses stand, so a press from before this bridge started doesn't count as a new one */
     /* after the page joins again (a relaunch, another world) the presses are counted afresh: the setting is per world (review 3) */
@@ -181,6 +187,42 @@ export class ApiWorker {
     catch (e) { this.log("api", `couldn't hand the turn on: ${e.message}`); }
   }
 
+  /** A Preview's room ask (0.4.3, Encounter Builder 0.42.0): looked at on every poll, answered once, beside any fight. Not while stopped. */
+  async roomTick() {
+    if (this.roomBusy || !this.key || this.stopped) return;
+    const ev = await this.foundry.eval(roomPendingIn); if (!ev?.sceneId || ev.seq == null) return;
+    const k = `${ev.sceneId}|${ev.seq}`; if (this.roomSeen.has(k)) return;
+    this.roomSeen.add(k); if (this.roomSeen.size > 200) this.roomSeen = new Set([...this.roomSeen].slice(-100));
+    this.roomBusy = true; try { await this.handleRoom(ev); } finally { this.roomBusy = false; }
+  }
+  async handleRoom(ev) {
+    const t0 = Date.now(), cap = Math.max(1, Number(this.cfg.apiMaxCallsPerHour) || 120), answer = (a, meta) => this.foundry.eval(roomAnswerIn, { sceneId: ev.sceneId, seq: ev.seq, answer: a, meta }, { timeout: 60000 });
+    if (this.recent() >= cap) {
+      const why = `${cap} calls in the last hour, the most allowed; press Wake Angel to go on`;
+      this.stopped = why; this.log("api", `stopped: ${why}`); await this.note({ state: "capped", reason: why });
+      return answer(null, { by: "api", failed: `the API route stopped: ${why}` }).catch(() => {});
+    }
+    const models = { sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5", fable: "claude-fable-5-2", ...(this.cfg.apiModels ?? {}) }, model = models[ev.model] ?? models.sonnet;
+    const content = [{ type: "text", text: `${ROOM_ASK}\n\n${JSON.stringify(ev.ask ?? {})}` }];
+    /* the picture: the module draws it on this page; only an id selector is taken from the page */
+    const sel = /^#[\w-]{1,80}$/.test(String(ev.picture ?? "")) ? ev.picture : null;
+    if (sel) { try { if (await this.foundry.eval(roomShowIn, { sceneId: ev.sceneId }, { timeout: 60000 })) { const img = await look(this.foundry, { region: "element", selector: sel, maxWidth: 1400, quality: 70 }); content.push({ type: "image", source: { type: "base64", media_type: img.mimeType, data: img.data } }); } } catch (e) { this.log("api", `no map picture for the room pick: ${e.message}`); } }
+    let out;
+    try { out = await this.call(model, content, typeof ev.system === "string" && ev.system ? ev.system : null); }
+    catch (e) {
+      const why = failureWords(e.status, e.apiMessage ?? e.message);
+      this.audit({ tool: "api-worker", args: { kind: "room", scene: ev.sceneId, model }, ok: false, error: why, ms: Date.now() - t0 });
+      if (hardFailure(e.status, e.apiMessage ?? "")) { this.stopped = why; this.log("api", `stopped: ${why}`); await this.note({ state: "stopped", reason: why }); }
+      return answer(null, { by: "api", model, failed: why }).catch(x => this.log("api", `couldn't tell the Preview: ${x.message}`));
+    }
+    const u = out.json.usage ?? {}, prices = { "claude-sonnet-5-5": [2, 2.5, 0.1, 10], "claude-opus-5-5": [4, 5, 0.2, 20], "claude-fable-5-2": [8, 10, 0.2, 40], ...(this.cfg.apiPrices ?? {}) }, price = prices[model];
+    const cost = price ? costOf(u, price) : null, text = (out.json.content ?? []).filter(x => x.type === "text").map(x => x.text).join("");
+    if (cost != null) this.spent += cost;
+    let res; try { res = await answer(planOf(text) ?? text, { by: "api", model, cost, seconds: out.seconds }); } catch (e) { res = { error: String(e?.message ?? e).split("\n")[0] }; }
+    this.audit({ tool: "api-worker", args: { kind: "room", scene: ev.sceneId, model }, ok: !res?.error, ms: Date.now() - t0, seconds: out.seconds, cost, state: res?.state ?? null, ...(res?.error ? { error: res.error } : {}) });
+    this.log("api", `room pick (${model}): ${res?.state ?? "?"}${res?.room ? ` room ${res.room}` : ""}${res?.error ? ` (${String(res.error).slice(0, 120)})` : ""}, ${out.seconds.toFixed(1)} s${cost != null ? `, $${cost.toFixed(4)}` : ""}`);
+  }
+
   /** Run `fn` with the module's API light renewed every 30 s meanwhile (review 1): a long answer must not look like a thinker gone away. */
   async whileThinking(fn) {
     const t = setInterval(() => { this.foundry.eval(apiAliveIn, { generation: this.generation }).catch(() => {}); }, 30000);
@@ -188,9 +230,9 @@ export class ApiWorker {
   }
   /** One call to the Messages API, the module's prompt as a cached system prompt. Three tries in all for a busy or failing API, each counted
       against the hourly cap and given apiTimeoutS seconds. Redirects are refused, so the key never goes to another address (review 11). */
-  async call(model, content) {
+  async call(model, content, system = null) {
     const url = this.cfg.apiUrl || "https://api.anthropic.com/v1/messages", maxTokens = Math.max(500, Number(this.cfg.apiMaxTokens) || 4000);
-    const body = JSON.stringify({ model, max_tokens: maxTokens, system: [{ type: "text", text: this.system, cache_control: { type: "ephemeral" } }], messages: [{ role: "user", content }] });
+    const body = JSON.stringify({ model, max_tokens: maxTokens, system: [{ type: "text", text: system ?? this.system, cache_control: { type: "ephemeral" } }], messages: [{ role: "user", content }] });
     for (let attempt = 0; ; attempt++) {
       const limit = Math.max(10, Number(this.cfg.apiTimeoutS) || 60), t0 = Date.now(), ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), limit * 1000);
       let res, json; this.calls.push(Date.now());
