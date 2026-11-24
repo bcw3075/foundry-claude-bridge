@@ -49,9 +49,9 @@ const DEFAULTS = {
   /* the Messages API; tests point it at a stand-in */
   apiUrl: "https://api.anthropic.com/v1/messages",
   /* the model each of Encounter Builder's picks means; change these when newer models come, no code change needed */
-  apiModels: { sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5" },
+  apiModels: { sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5", fable: "claude-fable-5-2" },
   /* dollars per million tokens [fresh input, 5-minute cache write, cache read, output], for the cost shown in the module's History (checked 2026-11-12) */
-  apiPrices: { "claude-sonnet-5-5": [2, 2.5, 0.2, 10], "claude-opus-5-5": [4, 5, 0.2, 20] },
+  apiPrices: { "claude-sonnet-5-5": [2, 2.5, 0.1, 10], "claude-opus-5-5": [4, 5, 0.2, 20], "claude-fable-5-2": [8, 10, 0.2, 40] },
   /* a guard against a fault that loops: past this many calls in an hour the worker stops until Wake Angel (about $5 at worst at 120) */
   apiMaxCallsPerHour: 120,
   /* how often the worker looks whether a fight is on the API route, in seconds (a read that writes nothing) */

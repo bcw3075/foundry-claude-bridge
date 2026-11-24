@@ -329,6 +329,11 @@ try {
     await waitFor(async () => (await plansNow()).some(p => p.id === "look"));
     const lp = (await plansNow()).find(p => p.id === "look"), lc = (await apiCalls()).at(-1);
     check("api worker: the fight-start look goes to the API with its model and lands without a hand-on", !!lp && lp.kind === "submit" && lp.meta?.model === "claude-opus-5-5" && /"kind":"look"/.test(lc?.body?.messages?.[0]?.content?.[0]?.text ?? "") && /for a "look" event the look/.test(lc?.body?.messages?.[0]?.content?.[0]?.text ?? "") && (await sApi()).handoffs.length === handed, JSON.stringify(lp ?? null).slice(0, 200)); }
+  /* 0.4.2: her Fable pick on the module's Model column maps to Fable's model id and is priced */
+  { await setApi(ev(108, "turn", "r8", "fable"));
+    await waitFor(async () => (await plansNow()).some(p => p.id === "r8"));
+    const fp = (await plansNow()).find(p => p.id === "r8"), fc = (await apiCalls()).at(-1);
+    check("api worker: a Fable pick goes to claude-fable-5-2 and its cost is counted", fc?.body?.model === "claude-fable-5-2" && fp?.meta?.model === "claude-fable-5-2" && (fp?.meta?.usage?.cost ?? 0) > 0.0094, JSON.stringify(fp?.meta ?? null).slice(0, 200)); }
   await setApi("a.want = false; a.event = null"); await apiMode("ok");
   r = await call("foundry_status"); check("foundry_status shows the API worker", r.ok && r.data.api?.key === true && typeof r.data.api?.callsLastHour === "number" && !JSON.stringify(r.data).includes(KEY), JSON.stringify(r.data.api));
   const hl = await (await fetch(PUB + "/health")).json(); check("health says whether the API is on, nothing more", ["listening", "ready", "stopped"].includes(hl.api) && !JSON.stringify(hl).includes(KEY), JSON.stringify(hl));

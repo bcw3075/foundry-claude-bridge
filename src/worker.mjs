@@ -145,7 +145,7 @@ export class ApiWorker {
       this.stopped = why; this.log("api", `stopped: ${why}`); await this.note({ state: "capped", reason: why });
       return this.handOff(ev, `the API route stopped: ${why}`);
     }
-    const models = { sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5", ...(this.cfg.apiModels ?? {}) }, model = models[ev.model] ?? models.sonnet;
+    const models = { sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5", fable: "claude-fable-5-2", ...(this.cfg.apiModels ?? {}) }, model = models[ev.model] ?? models.sonnet;
     const t0 = Date.now(); let out;
     try {
       const content = [{ type: "text", text: `${ASK}\n\n${JSON.stringify(ev)}` }];
@@ -159,7 +159,7 @@ export class ApiWorker {
       else this.log("api", `${ev.monster ?? "a monster"} (${ev.kind}): ${why}`);
       return this.handOff(ev, why);
     }
-    const u = out.json.usage ?? {}, prices = { "claude-sonnet-5-5": [2, 2.5, 0.2, 10], "claude-opus-5-5": [4, 5, 0.2, 20], ...(this.cfg.apiPrices ?? {}) }, price = prices[model];
+    const u = out.json.usage ?? {}, prices = { "claude-sonnet-5-5": [2, 2.5, 0.1, 10], "claude-opus-5-5": [4, 5, 0.2, 20], "claude-fable-5-2": [8, 10, 0.2, 40], ...(this.cfg.apiPrices ?? {}) }, price = prices[model];
     const cost = price ? costOf(u, price) : null, text = (out.json.content ?? []).filter(x => x.type === "text").map(x => x.text).join("");
     if (cost != null) this.spent += cost;
     /* the answer goes in as it came when it holds no JSON: the module refuses it in words, and its own count of tries decides what comes next */
