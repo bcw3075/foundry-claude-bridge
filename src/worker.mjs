@@ -258,10 +258,12 @@ export class ApiWorker {
 
   /** An Ask Angel message from the Build window (0.4.4, Encounter Builder 0.43.0): looked at on every poll, answered once, beside any fight. */
   async askTick() {
-    if (this.askBusy || !this.key || this.stopped) return;
+    if (this.askBusy || !this.key) return;
     const ev = await this.foundry.eval(askPendingIn, { skip: [...this.askSeen] }, { timeout: 60000 }); if (!ev?.sceneId || ev.seq == null || typeof ev.text !== "string") return;
     const k = `${ev.sceneId}|${ev.seq}`; if (this.askSeen.has(k)) return;
     this.askSeen.add(k); if (this.askSeen.size > 200) this.askSeen = new Set([...this.askSeen].slice(-100));
+    /* stopped (a refused key, the cap): the box is told why at once, rather than waiting out its time (review 8) */
+    if (this.stopped) { await this.foundry.eval(askAnswerIn, { sceneId: ev.sceneId, seq: ev.seq, answer: null, meta: { by: "api", failed: `the API route is stopped: ${this.stopped}` } }, { timeout: 60000 }).catch(e => this.log("api", `couldn't tell the box: ${e.message}`)); return; }
     this.askBusy = true; try { await this.handleAsk(ev); } finally { this.askBusy = false; }
   }
   async handleAsk(ev) {
@@ -275,15 +277,15 @@ export class ApiWorker {
     const done = async (a, meta) => { let res; try { res = await answer(a, meta); } catch (e) { res = { error: String(e?.message ?? e).split("\n")[0] }; }
       this.audit({ tool: "api-worker", args: { kind: "build", scene: ev.sceneId, model }, ok: !res?.error && !meta.failed, ms: Date.now() - t0, seconds, cost, calls: used, toolCalls, state: res?.state ?? null, ...(meta.failed ? { error: meta.failed } : res?.error ? { error: res.error } : {}) });
       this.log("api", `Ask Angel (${model}): ${res?.state ?? "?"}${meta.failed ? ` (${String(meta.failed).slice(0, 120)})` : ""}, ${used} call(s), ${toolCalls} tool call(s), ${seconds.toFixed(1)} s${cost != null ? `, $${cost.toFixed(4)}` : ""}`); };
-    for (;;) {
+    try { for (;;) {
       if (this.recent() >= cap) {
         const why = `${cap} calls in the last hour, the most allowed; press Wake Angel to go on`;
-        this.stopped = why; this.log("api", `stopped: ${why}`); await this.note({ state: "capped", reason: why });
+        this.stopped = why; this.log("api", `stopped: ${why}`); await this.note({ state: "capped", reason: why }).catch(() => {});
         failed = `the API route stopped: ${why}`; break;
       }
       let out;
       try { out = await this.call(model, null, system, { messages, tools, maxTokens: Math.max(8000, Number(this.cfg.apiMaxTokens) || 0), timeoutS: Math.max(120, Number(this.cfg.apiTimeoutS) || 0) }); }
-      catch (e) { failed = failureWords(e.status, e.apiMessage ?? e.message); if (hardFailure(e.status, e.apiMessage ?? "")) { this.stopped = failed; this.log("api", `stopped: ${failed}`); await this.note({ state: "stopped", reason: failed }); } break; }
+      catch (e) { failed = failureWords(e.status, e.apiMessage ?? e.message); if (hardFailure(e.status, e.apiMessage ?? "")) { this.stopped = failed; this.log("api", `stopped: ${failed}`); await this.note({ state: "stopped", reason: failed }).catch(() => {}); } break; }
       used++; seconds += out.seconds; const u = out.json.usage ?? {}; if (price) { const c = costOf(u, price); cost += c; this.spent += c; }
       const content = Array.isArray(out.json.content) ? out.json.content : [], uses = content.filter(x => x.type === "tool_use");
       if (out.json.stop_reason !== "tool_use" || !uses.length) { text = content.filter(x => x.type === "text").map(x => x.text).join(""); break; }
@@ -298,7 +300,7 @@ export class ApiWorker {
       for (const m of messages) if (Array.isArray(m.content)) for (const b of m.content) delete b.cache_control;
       results[results.length - 1].cache_control = { type: "ephemeral" };
       messages.push({ role: "user", content: results });
-    }
+    } } catch (e) { failed = `the worker failed: ${String(e?.message ?? e).split("\n")[0].slice(0, 160)}`; }   /* the box always hears back (review 7) */
     const meta = { by: "api", model, cost: cost == null ? null : Math.round(cost * 10000) / 10000, seconds: Math.round(seconds * 10) / 10, calls: used, toolCalls };
     return failed ? done(null, { ...meta, failed }) : done(planOf(text) ?? text, meta);
   }
@@ -314,14 +316,14 @@ export class ApiWorker {
     try {
       if (name === "notion_search") {
         const q = String(input?.query ?? "").trim().slice(0, 200); if (!q) return { error: "Search with some words." };
-        const j = await get("/search", { query: q, page_size: 10 });
+        const j = await get("/search", { query: q, page_size: 10, filter: { property: "object", value: "page" } });   /* pages only: a database's blocks can't be read (review 10) */
         return { pages: (j.results ?? []).slice(0, 10).map(o => ({ id: o.id, title: notionTitle(o).slice(0, 200), url: o.url, edited: o.last_edited_time, kind: o.object })) };
       }
       if (name === "notion_page") {
         if (id.replace(/-/g, "").length !== 32) return { error: "That isn't a Notion page id: take one from notion_search." };
-        const lines = []; let size = 0, fetches = 0;
+        const lines = [], until = Date.now() + 45000; let size = 0, fetches = 0;   /* 45 s for one page in all (review 10) */
         const walk = async (bid, depth) => { let cursor = null;
-          do { if (++fetches > 40 || size > 12000) return; const j = await get(`/blocks/${bid}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`);
+          do { if (++fetches > 40 || size > 12000 || Date.now() > until) return; const j = await get(`/blocks/${bid}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`);
             for (const b of j.results ?? []) { const l = notionLine(b); if (l) { const t = `${"  ".repeat(depth)}${l}`; lines.push(t); size += t.length + 1; } if (b.has_children && depth < 1 && !/^child_/.test(b.type) && size <= 12000) await walk(b.id, depth + 1); }
             cursor = j.has_more ? j.next_cursor : null; } while (cursor); };
         await walk(id, 0);

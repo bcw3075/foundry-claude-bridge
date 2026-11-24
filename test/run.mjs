@@ -356,6 +356,10 @@ try {
     await waitFor(async () => (await stubAsk()).answers.length > 0);
     let sk = await stubAsk();
     check("api worker: an ask past the hourly cap is told why and stops the worker, with no call made", sk.answers[0]?.seq === 601 && /5 calls in the last hour/.test(sk.answers[0]?.meta?.failed ?? "") && (await apiCalls()).length === before, JSON.stringify(sk.answers[0] ?? null).slice(0, 200));
+    await putAsk(6011); await waitFor(async () => (await stubAsk()).answers.length > 1);
+    sk = await stubAsk(); sk.answers.splice(1);
+    check("api worker: while stopped, a new ask is told why at once, with no call made", /the API route is stopped: 5 calls/.test((await stubAsk()).answers[1]?.meta?.failed ?? "") && (await apiCalls()).length === before, JSON.stringify((await stubAsk()).answers[1] ?? null).slice(0, 200));
+    await call("run_script", { code: "window.__stubAsk.answers.splice(1); return 1" });
     await setApi("a.wake = { n: 3, launch: 'L1' }"); await new Promise(x => setTimeout(x, 2500));
     before = (await apiCalls()).length; const nBefore = (await (await fetch("http://127.0.0.1:30999/stub/notion/calls")).json()).length; await putAsk(602);
     await waitFor(async () => (await stubAsk()).answers.length > 1, 80);
