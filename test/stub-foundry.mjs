@@ -60,7 +60,12 @@ export function startStub(port = 30999) {
       const room={pending:skip=>{const r=window.__stubRoom;r.skips=skip;return r.ask&&!r.answers.some(x=>x.seq===r.ask.seq)&&!(skip||[]).includes(r.ask.sceneId+"|"+r.ask.seq)?r.ask:null},
         show:async id=>{window.__stubRoom.shows++;document.getElementById("lythara-encounter-builder-rooms")?.remove();const d=document.createElement("div");d.id="lythara-encounter-builder-rooms";d.style.cssText="position:fixed;left:0;top:0;width:300px;height:200px;background:#fff;z-index:9";document.body.append(d);return true},
         answer:async(sid,seq,a,meta)=>{window.__stubRoom.answers.push({sid,seq,a,meta});document.getElementById("lythara-encounter-builder-rooms")?.remove();return meta?.failed?{state:"refused",error:meta.failed}:{state:"picked",room:a?.room}}};
-      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{room,fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp"),
+      /* Encounter Builder 0.43.0's Ask Angel (bridge 0.4.4): set __stubAsk.ask to a pending event; tool answers find_creatures, answer records */
+      window.__stubAsk={ask:null,answers:[],tools:[]};
+      const ask={pending:async skip=>{const r=window.__stubAsk;r.skips=skip;return r.ask&&!r.answers.some(x=>x.seq===r.ask.seq)&&!(skip||[]).includes(r.ask.sceneId+"|"+r.ask.seq)?r.ask:null},
+        tool:async(sid,name,input)=>{window.__stubAsk.tools.push({sid,name,input});return name==="find_creatures"?{creatures:[{uuid:"Actor.w1",name:"Wolf",level:1}]}:{error:"stub: no "+name}},
+        answer:async(sid,seq,a,meta)=>{window.__stubAsk.answers.push({sid,seq,a,meta});return meta?.failed?{state:"refused",error:meta.failed}:{state:"answered"}}};
+      const encounterBuilder={id:"lythara-encounter-builder",version:"0.3.3",active:true,api:{room,ask,fight:{current:c=>window.__stubFight,waitForEvent:brainWait,submitPlan:brainCall("submit"),checkPlan:brainCall("check"),reportFailure:brainCall("giveUp"),
         handOff:async(c,id,reason,meta)=>{window.__stubApi.handoffs.push({combat:c.id,id,reason,meta});return {state:"requested",handedOff:true}},
         route:{wanted:()=>({ok:true,want:window.__stubApi.want,wake:window.__stubApi.wake,launch:window.__stubApi.launch}),note:async n=>{window.__stubApi.notes.push(n);return n},
           alive:async g=>{window.__stubApi.alives++;return {ok:true}},spend:async(c,u)=>{window.__stubApi.spends.push({combat:c.id,...u});return true}}}}};
@@ -105,11 +110,23 @@ export function startStub(port = 30999) {
     api.calls.push({ at: Date.now(), hasKey: !!req.headers["x-api-key"], version: req.headers["anthropic-version"] ?? null, mode: api.mode, body });
     if (api.mode === "401") return res.status(401).json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } });
     if (api.mode === "500") return res.status(500).json({ type: "error", error: { type: "api_error", message: "Internal server error" } });
+    /* Ask Angel: three tools at once, then the answer; "askloop" asks for a tool every time */
+    if (api.mode === "ask" || api.mode === "askloop") { const rounds = (body?.messages ?? []).filter(m => m.role === "user" && Array.isArray(m.content) && m.content.some(c => c.type === "tool_result")).length;
+      if (api.mode === "askloop" || rounds === 0) return res.json({ content: [{ type: "text", text: "Looking." }, { type: "tool_use", id: `t${rounds}a`, name: "find_creatures", input: { query: "wolf" } }, { type: "tool_use", id: `t${rounds}b`, name: "notion_search", input: { query: "road" } }, { type: "tool_use", id: `t${rounds}c`, name: "notion_page", input: { id: "0123456789abcdef0123456789abcdef" } }], usage: { input_tokens: 2000, output_tokens: 80 }, stop_reason: "tool_use" });
+      return res.json({ content: [{ type: "text", text: '{"reply": "Three wolves.", "brief": {"name": "Wolves", "creatures": [{"uuid": "Actor.w1", "count": 3}]}}' }], usage: { input_tokens: 500, cache_read_input_tokens: 2000, output_tokens: 120 }, stop_reason: "end_turn" }); }
     if (api.mode === "room") return res.json({ content: [{ type: "text", text: '{"room": 2, "why": "They sleep in the back room, out of sight."}' }], usage: { input_tokens: 1500, output_tokens: 30 }, stop_reason: "end_turn" });
     if (api.mode === "text") return res.json({ content: [{ type: "text", text: "I would bite the wizard." }], usage: { input_tokens: 10, output_tokens: 5 }, stop_reason: "end_turn" });
     res.json({ content: [{ type: "text", text: '```json\n{ "requestId": "r1", "reason": "Bite the nearest.", "steps": [{ "do": "strike", "item": "jaws", "target": "E1" }] }\n```' }],
       usage: { input_tokens: 100, cache_creation_input_tokens: 1000, cache_read_input_tokens: 0, output_tokens: 200 }, stop_reason: "end_turn" });
   });
+  /* a stand-in for the Notion API (0.4.4): search and blocks, recording whether a key and the version came (never the key) */
+  const notion = { calls: [] };
+  app.get("/stub/notion/calls", (req, res) => res.json(notion.calls));
+  app.post("/stub/notion/v1/search", (req, res) => { notion.calls.push({ path: "search", auth: /^Bearer secret_/.test(req.headers.authorization ?? ""), version: req.headers["notion-version"] ?? null, body: req.body });
+    res.json({ results: [{ object: "page", id: "01234567-89ab-cdef-0123-456789abcdef", url: "https://www.notion.so/x", last_edited_time: "2026-11-20T00:00:00.000Z", properties: { Name: { type: "title", title: [{ plain_text: "The " }, { plain_text: "old road" }] } } }], has_more: false }); });
+  app.get("/stub/notion/v1/blocks/:id/children", (req, res) => { notion.calls.push({ path: `blocks/${req.params.id}`, auth: /^Bearer secret_/.test(req.headers.authorization ?? ""), version: req.headers["notion-version"] ?? null });
+    if (req.params.id === "tg1") return res.json({ results: [{ id: "b9", type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ plain_text: "a den by the ford" }] }, has_children: false }], has_more: false });
+    res.json({ results: [{ id: "b1", type: "heading_2", heading_2: { rich_text: [{ plain_text: "The road" }] }, has_children: false }, { id: "b2", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Wolves hunt here at night." }] }, has_children: false }, { id: "tg1", type: "toggle", toggle: { rich_text: [{ plain_text: "Lairs" }] }, has_children: true }], has_more: false }); });
   app.get("/stub/alive", (req, res) => res.json({ alive: world.active, online: [...online].map(id => userNames[id]) }));
   app.post("/stub/restart", (req, res) => { world.active = false; online.clear(); setTimeout(() => { world.active = true; }, 5000); res.json({ ok: true }); });
   return new Promise(resolve => { const s = app.listen(port, "127.0.0.1", () => resolve({ port, close: () => s.close() })); });

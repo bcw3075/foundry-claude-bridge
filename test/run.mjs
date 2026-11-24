@@ -8,14 +8,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startStub } from "./stub-foundry.mjs";
 import { hashPassphrase } from "../src/auth.mjs";
-import { costOf, failureWords, hardFailure, planOf } from "../src/worker.mjs";
+import { askTools, costOf, failureWords, hardFailure, notionLine, notionTitle, planOf } from "../src/worker.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8790, PUB = `http://127.0.0.1:${PORT}`, PASS = "open sesame 2026", KEY = "sk-ant-test-" + crypto.randomBytes(8).toString("hex");
+const PORT = 8790, PUB = `http://127.0.0.1:${PORT}`, PASS = "open sesame 2026", KEY = "sk-ant-test-" + crypto.randomBytes(8).toString("hex"), NKEY = "secret_test" + crypto.randomBytes(8).toString("hex");
 const dataDir = path.join(ROOT, "test", ".data"); fs.rmSync(dataDir, { recursive: true, force: true }); fs.mkdirSync(dataDir, { recursive: true });
 const cfgPath = path.join(ROOT, "config.json"), hadCfg = fs.existsSync(cfgPath), savedCfg = hadCfg ? fs.readFileSync(cfgPath) : null;
 fs.writeFileSync(cfgPath, JSON.stringify({ publicUrl: PUB, port: PORT, foundryUrl: "http://127.0.0.1:30999", foundryUser: "Angel Bridge", passphrase: hashPassphrase(PASS), allowScripts: true, allowUi: true, headless: true, dataDir: "test/.data", evalTimeoutMs: 20000, fightWaitChunkS: 2,
-  anthropicApiKey: KEY, apiUrl: "http://127.0.0.1:30999/stub/api/v1/messages", apiPollS: 1, apiRetryMs: 50, apiMaxCallsPerHour: 5 }));
+  anthropicApiKey: KEY, apiUrl: "http://127.0.0.1:30999/stub/api/v1/messages", apiPollS: 1, apiRetryMs: 50, apiMaxCallsPerHour: 5, apiAskRounds: 2, notionApiKey: NKEY, notionUrl: "http://127.0.0.1:30999/stub/notion/v1" }));
 
 const results = []; const check = (name, ok, info = "") => { results.push([name, ok, info]); console.log(`${ok ? "PASS" : "FAIL"} ${name}${info ? " — " + info : ""}`); };
 const stub = await startStub(30999);
@@ -348,12 +348,34 @@ try {
     const rf = (await room()).answers[1];
     check("api worker: a room ask the API can't answer tells the Preview why; a picture selector that isn't an id is refused", rf?.seq === 502 && /three tries/.test(rf?.meta?.failed ?? "") && (await room()).shows === 1, JSON.stringify(rf ?? null).slice(0, 200));
     await call("run_script", { code: "window.__stubRoom.ask = null; return 1" }); }
+  /* 0.4.4: Encounter Builder 0.43.0's Ask Angel, answered beside the fights, with the module's tools and Notion's */
+  { const stubAsk = async () => (await call("run_script", { code: "return JSON.parse(JSON.stringify(window.__stubAsk))" })).data;
+    const tools = "[{ name: 'find_creatures', description: 'find', input_schema: { type: 'object', properties: {} } }, { name: 'rm -rf', description: 'x', input_schema: { type: 'object' } }, { name: 'notion_page', description: 'fake', input_schema: { type: 'object' } }]";
+    const putAsk = seq => call("run_script", { code: `window.__stubAsk.ask = { kind: 'build', sceneId: 's1', scene: 'Map', seq: ${seq}, model: 'sonnet', system: 'stub ask prompt', tools: ${tools}, text: 'The GM now: three wolves' }; return 1` });
+    await apiMode("ask"); let before = (await apiCalls()).length; await putAsk(601);
+    await waitFor(async () => (await stubAsk()).answers.length > 0);
+    let sk = await stubAsk();
+    check("api worker: an ask past the hourly cap is told why and stops the worker, with no call made", sk.answers[0]?.seq === 601 && /5 calls in the last hour/.test(sk.answers[0]?.meta?.failed ?? "") && (await apiCalls()).length === before, JSON.stringify(sk.answers[0] ?? null).slice(0, 200));
+    await setApi("a.wake = { n: 3, launch: 'L1' }"); await new Promise(x => setTimeout(x, 2500));
+    before = (await apiCalls()).length; const nBefore = (await (await fetch("http://127.0.0.1:30999/stub/notion/calls")).json()).length; await putAsk(602);
+    await waitFor(async () => (await stubAsk()).answers.length > 1, 80);
+    sk = await stubAsk(); const ac = (await apiCalls()).slice(before), nc = (await (await fetch("http://127.0.0.1:30999/stub/notion/calls")).json()).slice(nBefore), a2 = sk.answers[1], b0 = ac[0]?.body, b1 = ac[1]?.body;
+    const last = b1?.messages?.at(-1)?.content ?? [], marks = JSON.stringify(b1?.messages ?? []).split("cache_control").length - 1;
+    check("api worker: an ask goes to the API with the module's prompt, its tools (bad names dropped) and Notion's", ac.length === 2 && b0?.system?.[0]?.text === "stub ask prompt" && (b0?.tools ?? []).map(t => t.name).join() === "find_creatures,notion_search,notion_page" && b0?.messages?.[0]?.content?.[0]?.text === "The GM now: three wolves", JSON.stringify((b0?.tools ?? []).map(t => t.name)));
+    check("api worker: the module's tool runs on the page, the Notion ones against Notion with the key and version; the results go back with one cache mark", sk.tools.length === 1 && sk.tools[0].name === "find_creatures" && sk.tools[0].sid === "s1" && sk.tools[0].input?.query === "wolf" && nc.length === 3 && nc.every(c => c.auth && c.version === "2022-06-28") && last.length === 3 && last.every(c => c.type === "tool_result") && /Wolf/.test(last[0].content) && /The old road/.test(last[1].content) && /Wolves hunt here at night\.\\nLairs\\n  - a den by the ford/.test(last[2].content) && marks === 1 && !!last[2].cache_control, JSON.stringify({ nc: nc.length, marks, l2: last[2] }).slice(0, 600));
+    check("api worker: the answer goes back with its model, cost and how many calls and tool calls it took", a2?.seq === 602 && a2?.a?.reply === "Three wolves." && a2?.a?.brief?.creatures?.[0]?.uuid === "Actor.w1" && a2?.meta?.model === "claude-sonnet-5-5" && a2?.meta?.calls === 2 && a2?.meta?.toolCalls === 3 && a2?.meta?.cost > 0, JSON.stringify({ a: a2?.a, meta: a2?.meta }).slice(0, 400));
+    await apiMode("askloop"); before = (await apiCalls()).length; await putAsk(603);
+    await waitFor(async () => (await stubAsk()).answers.length > 2, 80);
+    sk = await stubAsk();
+    check("api worker: an ask that keeps looking things up stops after apiAskRounds calls and says so (and the worker tells the module which asks it has taken)", (sk.skips ?? []).includes("s1|602") && sk.answers[2]?.seq === 603 && /used 2 calls looking things up/.test(sk.answers[2]?.meta?.failed ?? "") && (await apiCalls()).length === before + 2, JSON.stringify(sk.answers[2] ?? null).slice(0, 200));
+    await call("run_script", { code: "window.__stubAsk.ask = null; return 1" }); }
+  check("api worker: Notion's text helpers", notionTitle({ properties: { T: { type: "title", title: [{ plain_text: "A" }, { plain_text: "B" }] } } }) === "AB" && notionLine({ type: "heading_3", heading_3: { rich_text: [{ plain_text: "H" }] } }) === "### H" && notionLine({ type: "to_do", to_do: { checked: true, rich_text: [{ plain_text: "x" }] } }) === "[x] x" && notionLine({ id: "p1", type: "child_page", child_page: { title: "Sub" } }) === "[page: Sub] (id p1)" && askTools([{ name: "a_b", description: "d", input_schema: { type: "object" } }], false).length === 1);
   await setApi("a.want = false; a.event = null"); await apiMode("ok");
-  r = await call("foundry_status"); check("foundry_status shows the API worker", r.ok && r.data.api?.key === true && typeof r.data.api?.callsLastHour === "number" && !JSON.stringify(r.data).includes(KEY), JSON.stringify(r.data.api));
+  r = await call("foundry_status"); check("foundry_status shows the API worker", r.ok && r.data.api?.key === true && typeof r.data.api?.callsLastHour === "number" && r.data.api?.notion === true && !JSON.stringify(r.data).includes(KEY) && !JSON.stringify(r.data).includes(NKEY), JSON.stringify(r.data.api));
   const hl = await (await fetch(PUB + "/health")).json(); check("health says whether the API is on, nothing more", ["listening", "ready", "stopped"].includes(hl.api) && !JSON.stringify(hl).includes(KEY), JSON.stringify(hl));
 
   const audit = fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").trim().split("\n").map(l => JSON.parse(l));
-  check("the API key is in no log and no audit record", !fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").includes(KEY) && !fs.readFileSync(path.join(dataDir, "bridge.log"), "utf8").includes(KEY) && !out.includes(KEY) && audit.some(a => a.tool === "api-worker"));
+  check("the API key is in no log and no audit record", !fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").includes(NKEY) && !fs.readFileSync(path.join(dataDir, "bridge.log"), "utf8").includes(NKEY) && !fs.readFileSync(path.join(dataDir, "audit.log"), "utf8").includes(KEY) && !fs.readFileSync(path.join(dataDir, "bridge.log"), "utf8").includes(KEY) && !out.includes(KEY) && audit.some(a => a.tool === "api-worker"));
   check("audit log has every call", audit.length >= 24 && audit.every(a => a.tool && a.time), `${audit.length} entries`);
   check("audit records never hold an image", !audit.some(a => JSON.stringify(a).length > 5000), `longest ${Math.max(...audit.map(a => JSON.stringify(a).length))} chars`);
   await client.close();

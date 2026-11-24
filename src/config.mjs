@@ -61,7 +61,13 @@ const DEFAULTS = {
   /* how long one request may take before it is tried again, in seconds (three tries in all) */
   apiTimeoutS: 60,
   /* how long it waits before trying a busy or failing API again (then twice as long), in milliseconds */
-  apiRetryMs: 5000
+  apiRetryMs: 5000,
+  /* Encounter Builder 0.43.0's Ask Angel (0.4.4): the most calls one ask may make while it looks things up with its tools (each counts against the cap) */
+  apiAskRounds: 8,
+  /* the Notion API, for Ask Angel's two Notion tools; on only when the owner adds "notionApiKey" here by hand: a read-only internal integration's
+     key (Notion: Settings, Connections, Develop or manage integrations; capabilities "Read content" only), with only the campaign pages she shares
+     with it. Never logged, audited or sent anywhere but Notion. Tests point the address at a stand-in. */
+  notionUrl: "https://api.notion.com/v1"
 };
 
 export function loadConfig() {
